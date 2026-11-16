@@ -4,16 +4,21 @@ A minimalist Python desktop media inspector for macOS. Browse folders, click a f
 
 ## Run
 
-For the standalone macOS app, open `dist/Frameglass.app` or copy it to Applications. To rebuild, double-click `Build App.command`. See [Building the app](docs/BUILDING.md).
-
-Double-click `Launch.command` in Finder, or run:
+Frameglass runs from source on macOS with Python 3.10 or later.
 
 ```sh
-cd /Users/editor/PycharmProjects/Frameglass
+git clone https://github.com/vonbrauss/frameglass.git
+cd frameglass
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 .venv/bin/python -m frameglass
 ```
 
-The local virtual environment is installed. For a fresh installation, use Python 3.10+ and `python3 -m venv .venv`, then `.venv/bin/pip install -r requirements.txt`. Install FFmpeg separately (Homebrew: `brew install ffmpeg`). Both FFprobe and FFmpeg are already installed on this Mac.
+After the first setup, double-click `Launch.command` in Finder or run the last line again.
+
+Frameglass needs FFmpeg and FFprobe. If they are missing, the app offers to install them (see [Media-tool installation and updates](#media-tool-installation-and-updates)), or install them yourself with Homebrew: `brew install ffmpeg`.
+
+To build a standalone `Frameglass.app`, double-click `Build App.command`. The result lands in `dist/`. It is ad hoc signed for Apple silicon, so macOS asks for confirmation the first time it opens on another Mac. See [Building the app](docs/BUILDING.md).
 
 ## Interface
 
@@ -75,11 +80,13 @@ ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=640x360:rate=24 -f
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-The tests exercise actual FFprobe/FFmpeg processes through the Qt event loop, including metadata, thumbnails, decoding, cancellation, invalid media, filename filtering, keyboard selection, expandable tracks, and drops over the metadata viewer. Test settings are isolated from your saved app preferences. They use Qt's offscreen platform and save a preview to `/private/tmp/frameglass-preview.png`.
+The tests exercise actual FFprobe/FFmpeg processes through the Qt event loop, including metadata, thumbnails, decoding, cancellation, invalid media, filename filtering, keyboard selection, expandable tracks, and drops over the metadata viewer. Test settings are isolated from your saved app preferences. They use Qt's offscreen platform and save a preview to `/private/tmp/frameglass-preview.png`. Several tests read two sample clips from `/private/tmp`; create them first with `.venv/bin/python tests/make_fixtures.py`.
 
 Built with [Qt for Python](https://doc.qt.io/qtforpython-6/) and [FFmpeg / FFprobe](https://ffmpeg.org/ffprobe.html). The installed Python dependencies retain their upstream licenses. A standalone Apple Silicon macOS build is available at `dist/Frameglass.app`. It bundles Python and the GUI/playback dependencies and is locally ad-hoc signed. Double-click `Build App.command` to rebuild it; see [Building the app](docs/BUILDING.md).
 
 ### Still images
+
+HEIC/HEIF stills need the optional `pillow-heif` package: `.venv/bin/pip install pillow-heif`. Without it, Frameglass inspects those files through FFprobe/FFmpeg instead of the still-image view. Check that package's bundled codec licenses before shipping it inside a standalone build.
 
 JPEG, PNG, TIFF, WebP, BMP and other Pillow-supported stills have a separate Overview with an oriented, ICC-managed sRGB preview, fit/100%/zoom controls, pixel dimensions, file size, format, bit depth, transparency and print density when recorded. Capture settings, descriptions and rights appear when embedded. EXIF, IPTC, XMP and image text are available in collapsed metadata groups; GPS stays in a separate collapsed Location group. Image reports omit video timecode and track counts. Animated images retain the media viewer. Missing profiles are explicitly identified; unsupported profile conversions use a labeled approximate preview. Video inspection and playback retain their existing layout.
 
@@ -100,6 +107,8 @@ See [Quality workspace guide](docs/QUALITY_WORKSPACE.md) for workflows and inter
 ### Media-tool installation and updates
 
 Frameglass checks FFmpeg/FFprobe versions in the background on every normal launch, compares them with the official stable release, and checks Homebrew package revisions when applicable. Missing/unusable tools and available updates appear in a dismissible Review tools banner. Open **Settings gear → Media tools & updates** at any time. Checks never install, upgrade or switch tools automatically. Offline checks report that update verification is unavailable.
+
+The launch check contacts ffmpeg.org, the FFmpeg build server and, for Homebrew tools, Homebrew's formula API. To keep launch offline, turn off **Settings → Check for media tool updates when Frameglass opens**. Frameglass then only confirms that the installed tools run, and checks for updates when you open Media tools & updates. Media inspection itself never uses the network.
 
 Homebrew installations remain Homebrew-managed by default. Choose **Use existing Homebrew tools** without installing anything, or **Update with Homebrew** after confirmation. Versioned FFmpeg formulae and pins are respected. Homebrew may update required dependencies; Frameglass does not select unrelated packages for upgrade or unpin packages.
 

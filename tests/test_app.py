@@ -44,6 +44,15 @@ class InspectionTests(unittest.TestCase):
         until(lambda: self.w.scan is None)
         self.assertIn('no decoding warnings', self.w.scan_log)
         self.assertEqual(self.w.report()['metadata']['streams'][1]['codec_type'], 'audio')
+    def test_crashed_decoder_is_never_reported_as_passed(self):
+        from PySide6.QtCore import QProcess
+        self.w.scan = QProcess(self.w)
+        self.w.cancelled = False
+        self.w.scan_log = ''
+        self.w.scan_finished(0, QProcess.CrashExit)
+        self.assertIn('Failed', self.w.decode_state_label.text())
+        self.assertIn('stopped unexpectedly', self.w.scan_log)
+        self.assertIsNone(self.w.scan)
     def test_unreadable_file(self):
         path = Path('/private/tmp/frameglass-broken.mp4')
         path.write_bytes(b'not a video')

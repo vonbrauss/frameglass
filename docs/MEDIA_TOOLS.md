@@ -6,6 +6,8 @@ Frameglass uses FFprobe for video/audio metadata and FFmpeg for thumbnails, deco
 
 A background check runs each time the app normally opens. It executes each selected tool with `-version`, checks the official stable FFmpeg release, and checks available private builds. If Homebrew owns the selected tools, the matching formula's available package version and revision are also checked through Homebrew's formula API. Read-only Homebrew inventory commands run with automatic updates disabled. No install, upgrade or tool-source change happens during this check.
 
+Turn off **Settings → Check for media tool updates when Frameglass opens** to keep launch offline. The app then only runs each selected tool with `-version`; it starts no network request and no Homebrew command. Opening Media tools & updates still runs the full check.
+
 Missing/unusable tools or updates show a Review tools banner. Later dismisses the banner for the current session. The complete status remains accessible through Settings gear → Media tools & updates. When a network check fails, the app reports that updates could not be verified; it does not claim the tools are current. An upstream release can precede a matching Homebrew package or private build; the available versions are displayed separately.
 
 ## Keep Homebrew

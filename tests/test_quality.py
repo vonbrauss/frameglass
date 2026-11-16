@@ -111,3 +111,8 @@ class QualityWorkspaceTests(unittest.TestCase):
     inspector.open_quality(0);quality=inspector.quality_workspace;self.assertEqual(quality.compare_paths[0],inspector.path)
     inspector.open_quality_file(str(self.root/'image.png'));until(lambda:inspector.data is not None)
     self.assertEqual(inspector.data['kind'],'still');self.assertFalse(quality.isVisible());inspector.close();QTest.qWait(50)
+ def test_timeout_message_reports_the_actual_limit(self):
+    import sys
+    from frameglass.quality import capture
+    with self.assertRaises(TimeoutError) as raised:capture([sys.executable,'-c','import time; time.sleep(5)'],Event(),timeout=.3)
+    self.assertIn('0.3 seconds',str(raised.exception))

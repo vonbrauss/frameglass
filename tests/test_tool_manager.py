@@ -133,3 +133,15 @@ class ToolManagerTests(unittest.TestCase):
     job=BrewJob({'path':'brew','formula':'ffmpeg','pinned':True},signals)
     with patch.object(job,'command') as command:job.run();command.assert_not_called()
     self.assertIn('pinned',received[0][1])
+ def test_local_check_contacts_no_server(self):
+    signals=ToolSignals();received=[];signals.checked.connect(received.append)
+    job=CheckJob({'ffmpeg':'test-ffmpeg','ffprobe':'test-ffprobe'},signals,online=False)
+    with patch('frameglass.tool_manager.inspect_tool',side_effect=lambda name,path,c:info(name)),patch('frameglass.tool_manager.fetch') as fetch,patch('frameglass.tool_manager.find_brew',return_value=None):job.run()
+    fetch.assert_not_called();self.assertFalse(received[0]['online']);self.assertFalse(received[0]['errors'])
+    self.assertEqual(received[0]['tools'][0]['status'],'Installed · update check unavailable')
+ def test_launch_setting_selects_local_or_online_check(self):
+    with tempfile.TemporaryDirectory() as folder:
+      settings=QSettings(str(Path(folder)/'settings.ini'),QSettings.IniFormat);controller=ToolController(settings)
+      with patch('frameglass.tool_manager.QThreadPool') as pool:
+        controller.check_local();self.assertFalse(controller.check_job.online);controller.check_job=None
+        controller.check();self.assertTrue(controller.check_job.online);self.assertEqual(pool.globalInstance.return_value.start.call_count,2)

@@ -190,7 +190,7 @@ def capture(command,cancelled,timeout=30,stderr_limit=200000,env=None):
             if cancelled.is_set():
                 process.kill();process.communicate();raise Cancelled()
             if deadline and time.monotonic()>deadline:
-                process.kill();process.communicate();raise TimeoutError('Inspection exceeded 30 seconds')
+                process.kill();process.communicate();raise TimeoutError(f'The process did not finish within {timeout:g} seconds')
             try:
                 stdout,stderr=process.communicate(timeout=.2)
                 return process.returncode,stdout,stderr.decode(errors='replace')[-stderr_limit:] if stderr_limit else stderr.decode(errors='replace')

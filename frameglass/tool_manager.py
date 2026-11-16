@@ -276,19 +276,21 @@ class ToolSignals(QObject):
 
 
 class CheckJob(QRunnable):
-    def __init__(self,paths,signals):
-        super().__init__();self.paths=paths;self.signals=signals;self.cancelled=Event()
+    def __init__(self,paths,signals,online=True):
+        super().__init__();self.paths=paths;self.signals=signals;self.online=online;self.cancelled=Event()
     def run(self):
-        result={'tools':[],'latest':'','manifest':None,'errors':[],'brew':None}
+        result={'tools':[],'latest':'','manifest':None,'errors':[],'brew':None,'online':self.online}
         try:
             for name in TOOLS:result['tools'].append(inspect_tool(name,self.paths[name],self.cancelled))
-            try:result['latest']=parse_upstream(fetch(UPSTREAM,self.cancelled).decode('utf-8',errors='replace'))
-            except Cancelled:raise
-            except Exception as error:result['errors'].append('Official release check: '+str(error))
-            try:result['manifest']=parse_manifest(fetch(PROVIDER+'/',self.cancelled).decode('utf-8',errors='replace'),architecture())
-            except Cancelled:raise
-            except Exception as error:result['errors'].append('Installer availability: '+str(error))
-            result['brew']=detect_homebrew(self.paths,self.cancelled)
+            if self.online:
+                try:result['latest']=parse_upstream(fetch(UPSTREAM,self.cancelled).decode('utf-8',errors='replace'))
+                except Cancelled:raise
+                except Exception as error:result['errors'].append('Official release check: '+str(error))
+                try:result['manifest']=parse_manifest(fetch(PROVIDER+'/',self.cancelled).decode('utf-8',errors='replace'),architecture())
+                except Cancelled:raise
+                except Exception as error:result['errors'].append('Installer availability: '+str(error))
+            # Homebrew's own commands can refresh package data, so a local-only check leaves it alone.
+            result['brew']=detect_homebrew(self.paths,self.cancelled) if self.online else None
             if result['brew'] and result['brew']['error']:result['errors'].append('Homebrew check: '+result['brew']['error'])
             available=result['manifest']['version'] if result['manifest'] else ''
             for tool in result['tools']:
@@ -489,21 +491,28 @@ class ToolController(QObject):
         self.signals=ToolSignals(self);self.signals.checked.connect(self.checked,Qt.QueuedConnection)
         self.signals.progress.connect(self.progress,Qt.QueuedConnection);self.signals.installed.connect(self.installed,Qt.QueuedConnection)
     def check(self):
+        # Connected to button clicks, so it takes no arguments: always a full online check.
+        self.start_check(True)
+    def check_local(self):
+        """Verify the installed tools only; contact no server."""
+        self.start_check(False)
+    def start_check(self,online):
         if self.check_job or self.install_job:return
         paths={name:executable(name,self.settings.value(name,'')) for name in TOOLS}
-        self.check_job=CheckJob(paths,self.signals)
+        self.check_job=CheckJob(paths,self.signals,online)
         if self.dialog:
-            self.dialog.refresh();self.dialog.summary.setText('Checking installed versions, Homebrew and stable releases…')
+            self.dialog.refresh();self.dialog.summary.setText('Checking installed versions, Homebrew and stable releases…' if online else 'Checking installed versions…')
             self.dialog.progress.setRange(0,0);self.dialog.progress.show()
         QThreadPool.globalInstance().start(self.check_job)
     def checked(self,result):
         self.check_job=None;self.result=result
         if self.dialog:self.dialog.progress.hide();self.dialog.refresh()
         self.changed.emit(result)
+        if not result.get('online',True) and self.dialog and self.dialog.isVisible():self.check()
     def show(self):
         if self.dialog is None:self.dialog=ToolDialog(self,self.parent())
         self.dialog.refresh();self.dialog.show();self.dialog.raise_();self.dialog.activateWindow()
-        if self.result is None:self.check()
+        if self.result is None or not self.result.get('online',True):self.check()
     def install(self):
         if self.dialog and self.dialog.method.currentData()=='homebrew':
             self.install_homebrew();return

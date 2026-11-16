@@ -11,6 +11,15 @@ from PySide6.QtCore import QObject, QRunnable, Signal, Qt, QEvent
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QLabel, QPushButton, QDialog, QSizePolicy
 
+try:
+    # Optional: Pillow cannot open HEIC/HEIF by itself. Without this package
+    # those files fall back to FFprobe/FFmpeg inspection.
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    HEIF_SUPPORT = True
+except ImportError:
+    HEIF_SUPPORT = False
+
 STILL_EXTENSIONS = {'.jpg', '.jpeg', '.jpe', '.png', '.tif', '.tiff', '.webp', '.bmp', '.gif', '.ico', '.psd', '.avif', '.heic', '.heif'}
 
 

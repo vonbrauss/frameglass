@@ -8,7 +8,7 @@ from PySide6.QtGui import QAction, QDesktopServices, QFont, QKeySequence, QPixma
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QToolButton, QMenu, QFileDialog, QFileSystemModel, QTreeView,
     QSplitter, QTabWidget, QTextEdit, QScrollArea, QFormLayout, QFrame, QLineEdit,
-    QProgressBar, QMessageBox, QDialog, QDialogButtonBox, QGridLayout, QSizePolicy, QComboBox, QStackedWidget)
+    QProgressBar, QMessageBox, QDialog, QDialogButtonBox, QGridLayout, QSizePolicy, QComboBox, QStackedWidget, QCheckBox)
 from .core import executable, probe_args, scan_args, duration, size, rate, findings, decoder_advice
 
 from .stills import STILL_EXTENSIONS, StillSignals, StillJob, ImageViewer
@@ -270,7 +270,9 @@ class Window(QMainWindow):
         return self.tool_controller
 
     def check_tools_on_startup(self):
-        self.ensure_tool_controller().check()
+        controller=self.ensure_tool_controller()
+        if self.settings.value('check_updates_on_launch',True,type=bool):controller.check()
+        else:controller.check_local()
 
     def show_media_tools(self):
         self.ensure_tool_controller().show()
@@ -1080,16 +1082,21 @@ class Window(QMainWindow):
 
     def scan_finished(self, code, exit_status):
         self.scan_errors()
+        # A crashed decoder has no meaningful exit code; never read it as a pass.
+        crashed = exit_status == QProcess.CrashExit and not self.cancelled
+        failed = crashed or code != 0
         if self.cancelled:
             result = 'Scan cancelled. Integrity was not verified.'
-        elif code != 0:
+        elif crashed:
+            result = 'Decode scan failed: FFmpeg stopped unexpectedly before finishing. Integrity was not verified. See decoder output below.'
+        elif failed:
             result = f'Decode scan failed (exit {code}). See decoder output below.'
         elif self.scan_log.strip():
             result = 'Scan completed with decoder warnings or errors. Review the output below.'
         else:
             result = 'Scan completed. FFmpeg reported no decoding warnings or errors in the audio/video streams.\nThis does not guarantee perceptual quality or validate subtitles and attachments.'
-        self.decode_state_label.setText('Decode · '+('Cancelled / unverified' if self.cancelled else 'Failed' if code else 'Warnings' if self.scan_log.strip() else 'Passed'))
-        self.set_health('Scan cancelled' if self.cancelled else 'Scan failed' if code != 0 else 'Review decoder findings' if self.scan_log.strip() else 'Decode scan complete', result.split('\n')[0])
+        self.decode_state_label.setText('Decode · '+('Cancelled / unverified' if self.cancelled else 'Failed' if failed else 'Warnings' if self.scan_log.strip() else 'Passed'))
+        self.set_health('Scan cancelled' if self.cancelled else 'Scan failed' if failed else 'Review decoder findings' if self.scan_log.strip() else 'Decode scan complete', result.split('\n')[0])
         advice = '\n\n'.join(decoder_advice(self.scan_log))
         self.diag_text.setPlainText(result + ('\n\nInterpretation:\n' + advice if advice else '') + ('\n\nDecoder output (last 200,000 characters):\n' + self.scan_log if self.scan_log else ''))
         self.scan_log = self.diag_text.toPlainText()
@@ -1169,12 +1176,17 @@ class Window(QMainWindow):
         color_mode.addItem('Native player rendering', 'native')
         color_mode.setCurrentIndex(1 if self.settings.value('color_mode', 'auto') == 'native' else 0)
         form.addRow('Display color', color_mode)
+        update_check = QCheckBox('Check for media tool updates when Frameglass opens')
+        update_check.setChecked(self.settings.value('check_updates_on_launch', True, type=bool))
+        update_check.setToolTip('On: contacts ffmpeg.org, the FFmpeg build server and Homebrew at launch to compare versions.\nOff: launch stays offline and only confirms the installed tools work. Media tools & updates still checks on request.')
+        form.addRow('Updates', update_check)
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
         if dialog.exec():
             self.settings.setValue('color_mode', color_mode.currentData())
+            self.settings.setValue('check_updates_on_launch', update_check.isChecked())
             paths_changed=any(self.settings.value(name,'')!=field.text().strip() for name,field in fields.items())
             for name, field in fields.items():
                 self.settings.setValue(name, field.text().strip())
