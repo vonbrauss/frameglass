@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtMultimedia import QAudioFormat,QAudioBuffer
 from PySide6.QtTest import QTest
 from frameglass.app import Window,STYLE
-from frameglass.inspection_tools import LevelMeter,PixelLabel,Histogram,AudioAnalysisJob,AnalysisSignals,parse_audio_analysis
+from frameglass.inspection_tools import PixelLabel,Histogram,AudioAnalysisJob,AnalysisSignals,parse_audio_analysis
 
 app=QApplication.instance() or QApplication([]);app.setStyle('Fusion');app.setStyleSheet(STYLE)
 def until(predicate):
@@ -22,16 +22,12 @@ def until(predicate):
  raise AssertionError('Viewer operation timed out')
 
 class InspectionToolTests(unittest.TestCase):
- def test_meter_uses_pcm_samples_and_pixel_readout(self):
-    fmt=QAudioFormat();fmt.setSampleRate(48000);fmt.setChannelCount(2);fmt.setSampleFormat(QAudioFormat.Int16)
-    samples=np.array([[16384,8192],[-16384,-8192]],dtype='<i2')
-    meter=LevelMeter();meter.set_buffer(QAudioBuffer(QByteArray(samples.tobytes()),fmt))
-    self.assertAlmostEqual(meter.levels[0],-6.0206,places=3);self.assertAlmostEqual(meter.levels[1],-12.0412,places=3)
+ def test_pixel_readout_and_histogram(self):
     image=QImage(20,20,QImage.Format_RGBA8888);image.fill(QColor(32,64,128,255))
     picture=PixelLabel(image);picture.setPixmap(QPixmap.fromImage(image))
     self.assertIn('Preview RGB 32, 64, 128',picture.pixel_at(QPointF(5,5)))
     histogram=Histogram(image);self.assertEqual(int(np.argmax(histogram.hist[0])),32)
-    picture.close();meter.close();histogram.close()
+    picture.close();histogram.close()
  def test_actual_audio_measurement_and_full_band_waveform(self):
     signals=AnalysisSignals();received=[];signals.ready.connect(lambda data,error,token:received.append((data,error)))
     job=AudioAnalysisJob('/private/tmp/frameglass-test.mp4',0,'/opt/homebrew/bin/ffmpeg',signals,1,2)
@@ -60,7 +56,7 @@ class InspectionToolTests(unittest.TestCase):
      recent=json.loads(settings.value('recent_files'));self.assertEqual(recent[0],w.path)
      w.copy_summary();self.assertIn('Audio 1',app.clipboard().text());self.assertIn('Decode · Not scanned',w.decode_state_label.text())
      QTest.qWait(50)
-     w.playback.set_guides(True);self.assertTrue(w.playback.guides.isVisible())
+     self.assertFalse(w.playback.fullscreen_button.isHidden());self.assertEqual(w.playback.fullscreen_button.toolTip(),'Fullscreen viewer')
      w.playback.show_fullscreen();QTest.qWait(50);self.assertIsNotNone(w.playback.fullscreen_dialog)
      w.playback.fullscreen_dialog.close();QTest.qWait(50);self.assertIsNone(w.playback.fullscreen_dialog)
      w.playback.toggle();until(lambda:w.playback.frame_seen);w.start_scan();until(lambda:w.scan is None)
@@ -68,7 +64,3 @@ class InspectionToolTests(unittest.TestCase):
      w.resize(1150,800);w.tabs.setCurrentIndex(2);w.close();QTest.qWait(100)
      self.assertEqual(settings.value('last_tab'),2);self.assertEqual(settings.value('last_file'),'/private/tmp/frameglass-test.mp4')
      restored=Window(settings);self.assertTrue(settings.value('window_geometry'));self.assertGreaterEqual(restored.width(),restored.minimumWidth());restored.close();QTest.qWait(50)
- def test_meter_shows_named_monitor_channels(self):
-    meter=LevelMeter();meter.set_samples(np.array([[.5,-1.0],[.25,.1]],np.float32),['L','R'])
-    self.assertEqual(meter.names,['L','R']);self.assertAlmostEqual(meter.levels[0],-6.02,places=1);self.assertAlmostEqual(meter.levels[1],0,places=3)
-    meter.set_samples(np.zeros((0,2),np.float32));self.assertEqual(meter.levels,[])

@@ -13,6 +13,30 @@ from PySide6.QtGui import QColorSpace, QImage
 from PySide6.QtMultimedia import QVideoFrame
 
 
+EIGHT_BIT_FORMATS = {'nv12', 'nv21', 'nv16', 'nv24', 'rgb24', 'bgr24', 'rgba', 'bgra', 'argb', 'abgr', 'rgb0', 'bgr0', '0rgb', '0bgr',
+                     'uyvy422', 'yuyv422', 'yvyu422', 'gray', 'gbrp', 'gbrap', 'pal8'}
+
+
+def video_bit_depth(stream):
+    """Bits per color sample: the reported value, else the depth the pixel format defines. None if neither says."""
+    import re
+    reported = str(stream.get('bits_per_raw_sample') or '')
+    if reported.isdigit() and int(reported) > 0:
+        return int(reported)
+    pixel_format = str(stream.get('pix_fmt') or '').lower()
+    match = re.search(r'(?:p|gray|ya)(\d{1,2})(?:le|be)$', pixel_format)  # yuv422p10le, gbrp12be, gray10le
+    if match:
+        return int(match[1])
+    match = re.fullmatch(r'p[024](\d\d)(?:le|be)', pixel_format)  # p010le, p210le, p416le
+    if match:
+        return int(match[1])
+    if re.fullmatch(r'(?:rgb|bgr)48(?:le|be)|(?:rgba|bgra)64(?:le|be)', pixel_format):
+        return 16
+    if pixel_format in EIGHT_BIT_FORMATS or re.fullmatch(r'yuvj?a?4[0-4][0-4]p', pixel_format):
+        return 8
+    return None
+
+
 def scan_mode(stream):
     return {
         'progressive': 'Progressive',

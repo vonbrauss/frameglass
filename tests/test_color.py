@@ -59,3 +59,11 @@ class ColorTests(unittest.TestCase):
         self.assertIn('top field first',scan_mode({'field_order':'tt'}))
         self.assertIn('bottom field first',scan_mode({'field_order':'bb'}))
         self.assertEqual(scan_mode({}),'Not reported')
+    def test_video_bit_depth_uses_reported_value_then_pixel_format(self):
+        from frameglass.color import video_bit_depth
+        self.assertEqual(video_bit_depth({'bits_per_raw_sample': '10', 'pix_fmt': 'yuv422p10le'}), 10)
+        for pixel_format, bits in (('yuv422p10le', 10), ('yuv420p', 8), ('yuvj420p', 8), ('yuv444p12le', 12), ('gbrp12le', 12),
+                                   ('yuva444p16le', 16), ('p010le', 10), ('nv12', 8), ('rgb48le', 16), ('gray10le', 10), ('uyvy422', 8)):
+            self.assertEqual(video_bit_depth({'pix_fmt': pixel_format}), bits, pixel_format)
+        self.assertIsNone(video_bit_depth({'pix_fmt': 'mystery'}))
+        self.assertIsNone(video_bit_depth({}))

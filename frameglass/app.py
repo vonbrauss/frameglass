@@ -9,7 +9,7 @@ from PySide6.QtGui import QAction, QDesktopServices, QFont, QKeySequence, QPixma
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QToolButton, QMenu, QFileDialog, QFileSystemModel, QTreeView,
     QSplitter, QTabWidget, QTextEdit, QScrollArea, QFormLayout, QFrame, QLineEdit,
-    QProgressBar, QMessageBox, QDialog, QDialogButtonBox, QGridLayout, QSizePolicy, QComboBox, QStackedWidget, QCheckBox)
+    QProgressBar, QMessageBox, QDialog, QDialogButtonBox, QGridLayout, QSizePolicy, QComboBox, QStackedWidget, QCheckBox, QInputDialog)
 from .core import executable, probe_args, scan_args, duration, size, rate, findings, decoder_advice
 
 from .stills import STILL_EXTENSIONS, StillSignals, StillJob, ImageViewer
@@ -17,10 +17,10 @@ from .tool_manager import ToolController
 from .workspace import QualityWorkspace
 from .inspection_tools import AudioAnalysisDialog
 from .audio import audio_overview
-from .audition import MonitorSelector
+from .audio_monitor import LoudnessBox
 from .delivery import DeliveryBar
 from .player import ClipPlayer
-from .color import scan_mode, display_transform, display_description, ThumbnailJob, ThumbnailSignals
+from .color import scan_mode, video_bit_depth, display_transform, display_description, ThumbnailJob, ThumbnailSignals
 from .timecode import clip_timecode, media_tracks, duration_timecode
 from .design import STYLE, icon, tool_button, ElidedLabel, Preview, Section, Disclosure, MediaHero, AudioTrackBrowser
 
@@ -66,7 +66,9 @@ class Window(QMainWindow):
         self.tool_controller = None
         self.analysis_dialog = None
         self.analysis_summary = None
-        self.loudness_label = None
+        self.loudness_box = None
+        self.duration_actual = False
+        self.duration_switch = self.duration_value = self.duration_caption = None
         self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setWindowTitle('Frameglass — Media Inspector')
         self.resize(1280, 860)
@@ -143,6 +145,7 @@ class Window(QMainWindow):
         open_button.clicked.connect(self.open_file)
         self.delivery=DeliveryBar(self.settings,self)
         self.delivery.editRequested.connect(self.open_delivery_presets)
+        self.delivery.learnRequested.connect(self.learn_specs)
         toolbar.addWidget(self.delivery)
         toolbar.addSpacing(12)
         toolbar.addWidget(open_button)
@@ -156,6 +159,7 @@ class Window(QMainWindow):
             ('Compare files…', lambda: self.open_quality(0), 'Ctrl+Shift+C'),
             ('Batch inspect folder…', lambda: self.open_quality(1), 'Ctrl+Shift+B'),
             ('Delivery presets…', lambda: self.open_quality(2), ''),
+            ('Learn specs from this clip…', lambda: self.learn_specs(), ''),
             ('Analyze audio…', self.open_audio_analysis, ''),
             ('Media tools & updates…', self.show_media_tools, ''),
             ('Copy media summary', self.copy_summary, ''),
@@ -173,7 +177,7 @@ class Window(QMainWindow):
             if shortcut:
                 action.setShortcut(QKeySequence(shortcut))
                 self.addAction(action)
-            destination=quality_menu if title in ('Compare files…','Batch inspect folder…','Delivery presets…','Analyze audio…') else copy_menu if title.startswith('Copy') else menu
+            destination=quality_menu if title in ('Compare files…','Batch inspect folder…','Delivery presets…','Learn specs from this clip…','Analyze audio…') else copy_menu if title.startswith('Copy') else menu
             destination.addAction(action)
         menu.insertMenu(menu.actions()[2],quality_menu)
         menu.insertMenu(menu.actions()[3],copy_menu)
@@ -191,6 +195,7 @@ class Window(QMainWindow):
         self.tabs.tabBar().setDrawBase(False)
         self.overview, self.overview_layout = self.scroll_tab('Overview')
         self.streams, self.stream_layout = self.scroll_tab('Tracks')
+        self.tags_tab, self.tags_layout = self.scroll_tab('Tags')
         diagnostic = QWidget()
         diag = QVBoxLayout(diagnostic)
         diag.setContentsMargins(0, 18, 0, 0)
@@ -227,6 +232,7 @@ class Window(QMainWindow):
         self.diag_text.setReadOnly(True)
         self.diag_text.setPlainText('No file selected.')
         diag.addWidget(self.diag_text, 1)
+        self.diagnostic_tab = diagnostic
         self.tabs.addTab(diagnostic, 'Diagnostics')
         self.raw = QTextEdit()
         self.raw.setReadOnly(True)
@@ -300,7 +306,11 @@ class Window(QMainWindow):
         if not self.data:return
         from .quality import properties
         rows=properties(self.data)
-        self.copy_value(Path(self.path).name+'\n'+self.path+'\n'+'\n'.join(f'{k}: {v}' for k,v in rows.items() if v is not None))
+        lines=[f'{k}: {v}' for k,v in rows.items() if v is not None]
+        if self.data.get('kind')!='still':
+            length=duration_timecode(self.data)
+            if length.get('real_time'):lines.append(f"Video duration: {length['value']} {length['mode']} · real time {length['real_time']}")
+        self.copy_value(Path(self.path).name+'\n'+self.path+'\n'+'\n'.join(lines))
 
     def copy_timecode(self):
         if not self.data or self.data.get('kind')=='still':return
@@ -347,31 +357,25 @@ class Window(QMainWindow):
     def analysis_closed(self,dialog):
         if self.analysis_dialog is dialog:self.analysis_dialog=None
 
-    def audio_tools(self):
-        """Monitor choice and whole-track loudness for the selected audio track."""
-        widget=QWidget();box=QVBoxLayout(widget);box.setContentsMargins(0,0,0,0);box.setSpacing(6)
-        monitor=QHBoxLayout();monitor.setSpacing(8)
-        caption=label('Monitor','muted');caption.setWordWrap(False);monitor.addWidget(caption)
-        monitor.addWidget(MonitorSelector(self.playback),1);box.addLayout(monitor)
-        measure_row=QHBoxLayout();measure_row.setSpacing(8)
-        measure=QPushButton('Measure loudness and peak');measure.setObjectName('quiet')
-        measure.setToolTip('Reads the whole selected track with all of its channels. The monitor choice does not change the measurement.')
-        measure.clicked.connect(self.open_audio_analysis);measure_row.addWidget(measure)
-        self.loudness_label=ElidedLabel('Not measured','muted');measure_row.addWidget(self.loudness_label,1);box.addLayout(measure_row)
-        return widget
+    def new_loudness_box(self,horizontal=False):
+        """Whole-track loudness for the selected audio track; its button measures every track."""
+        box=LoudnessBox(self.playback,self.path,self.data,self.settings,self.delivery,horizontal)
+        # The delivery bar refreshes its own checks first; the values then recolor from them.
+        self.delivery.highlight.toggled.connect(box.refresh_results)
+        self.delivery.presets.currentIndexChanged.connect(box.refresh_results)
+        self.loudness_box=box
+        return box
 
-    def show_loudness(self,result):
-        if self.loudness_label is None or not isValid(self.loudness_label):return
-        text=f"Track {result['track']} · {result.get('integrated_lufs','?')} LUFS · {result.get('true_peak_dbfs','?')} dBTP"
-        if result.get('loudness_range_lu'):text+=f" · LRA {result['loudness_range_lu']} LU"
-        self.loudness_label.setText(text);self.loudness_label.setToolTip(text+'\nIntegrated loudness, true peak and loudness range of the whole track (EBU R 128).')
+    def stop_loudness(self):
+        if self.loudness_box is not None and isValid(self.loudness_box):self.loudness_box.cancel()
+        self.loudness_box=None
 
     def keep_analysis(self,result,error,token):
         if result and result['path']==self.path and self.analysis_dialog and not self.analysis_dialog.job.cancelled.is_set():
-            self.show_loudness(result)
             self.analysis_summary={k:v for k,v in result.items() if k not in ('waveform','log')}
             self.data.setdefault('audio_measurements',{})[str(result['track'])]=self.analysis_summary
             self.delivery.refresh()
+            if self.loudness_box is not None and isValid(self.loudness_box):self.loudness_box.refresh_results()
 
     def open_quality(self, tab=0):
         if self.playback:
@@ -386,6 +390,25 @@ class Window(QMainWindow):
         workspace.tabs.setCurrentIndex(tab)
         if tab == 0 and self.data and not any(workspace.compare_data):workspace.use_current(0)
         workspace.show();workspace.raise_();workspace.activateWindow()
+
+    def learn_specs(self,name=None):
+        """Save the loaded clip's specs as a delivery preset and highlight against it."""
+        if not self.data:
+            QMessageBox.information(self,'Learn specs','Open the clip whose specs you want to learn first.');return
+        from .quality import preset_from_media,load_presets
+        if name is None:
+            name,accepted=QInputDialog.getText(self,'Learn specs from this clip','Save this clip\'s specs as a delivery preset named:',text='Match '+Path(self.path).stem[:60])
+            if not accepted:return
+        name=str(name).strip()
+        if not name:return
+        preset=preset_from_media(self.data,name)
+        # A preset with the same name is replaced, so relearning a reference clip stays one entry.
+        presets=[p for p in load_presets(self.settings) if p['name']!=name]+[preset]
+        self.settings.setValue('delivery_presets',json.dumps(presets))
+        if self.quality_workspace:
+            self.quality_workspace.presets=load_presets(self.settings);self.quality_workspace.refresh_presets()
+        self.delivery.reload();self.delivery.presets.setCurrentText(name);self.delivery.highlight.setChecked(True)
+        self.status.setText(f"Learned {len(preset['rules'])} specs as “{name}”. Open another clip to compare.")
 
     def open_delivery_presets(self,name=''):
         self.open_quality(2)
@@ -426,11 +449,21 @@ class Window(QMainWindow):
                 rule_keys={'Codec':['video_codec' if delivery_track.startswith('Video') else 'audio_codec'],
                            'Scan':['scan'],'Primaries':['primaries'],'Pixel format':['pixel_format'],'Color space':['matrix'],
                            'Transfer':['transfer'],'Channels':['channels','channel_layout'],'Channel layout':['channel_layout'],
-                           'Sample rate':['sample_rate'],'Bit depth':['bits'],'Stream bitrate':['audio_bitrate_min','audio_bitrate_max'],
+                           'Sample rate':['sample_rate'],'Bit depth':['video_bits' if delivery_track.startswith('Video') else 'bits'],'Stream bitrate':['audio_bitrate_min','audio_bitrate_max'],
                            'Format':['container'],'Audio tracks':['audio_tracks']}.get(key,[])
                 self.delivery.bind(value_label,rule_keys,delivery_track if key not in ('Format','Audio tracks') else 'File')
             form.addRow(key_label, value_label)
         return widget
+
+    def fill_tags(self, sections):
+        """Fill the Tags tab with one card per group of embedded tags."""
+        shown = False
+        for title, tags in sections:
+            if tags:
+                self.card(self.tags_layout, title, [(key, json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)) for key, value in tags.items()])
+                shown = True
+        if not shown:
+            self.tags_layout.addWidget(label('No tags are embedded in this file.', 'muted'))
 
     def card(self, layout, title, rows):
         frame = Section(title)
@@ -590,7 +623,8 @@ class Window(QMainWindow):
             self.analysis_dialog.close()
             self.analysis_dialog=None
         self.analysis_summary=None
-        self.loudness_label=None
+        self.duration_switch=self.duration_value=self.duration_caption=None
+        self.stop_loudness()
         self.delivery.set_media(None,None)
         self.header_state.setText('Headers · Reading…')
         self.decode_state_label.setText('Decode · Not scanned')
@@ -623,6 +657,7 @@ class Window(QMainWindow):
         self.set_health('Reading headers…', 'Checking the container and media tracks.')
         clear(self.overview_layout)
         clear(self.stream_layout)
+        clear(self.tags_layout)
         self.card(self.overview_layout, 'Reading media…', [('Status', 'Inspecting container and track headers')])
         if Path(path).suffix.lower() in STILL_EXTENSIONS:
             self.still_job = StillJob(self.path, self.still_signals, self.thumbnail_cancelled, self.thumbnail_token)
@@ -685,7 +720,7 @@ class Window(QMainWindow):
             self.set_health('Unable to read media', 'The file may be unsupported, inaccessible or incomplete.')
             self.diag_text.setPlainText((stderr or json.dumps(data, indent=2) or 'No readable media streams.') + '\n\n' + '\n\n'.join(decoder_advice(stderr)))
             self.raw.setPlainText(json.dumps(data, indent=2, ensure_ascii=False))
-            self.tabs.setCurrentIndex(2)
+            self.tabs.setCurrentWidget(self.diagnostic_tab)
             return
         self.data = data
         self.remember_file()
@@ -708,7 +743,10 @@ class Window(QMainWindow):
         QTimer.singleShot(0,self.delivery.refresh)
         clear(self.overview_layout)
         clear(self.stream_layout)
+        clear(self.tags_layout)
         data = self.data
+        # Still images list their EXIF, IPTC and XMP on the Image metadata tab instead.
+        self.tabs.setTabVisible(self.tabs.indexOf(self.tags_tab), data.get('kind') != 'still')
         if data.get('kind') == 'still':
             self.render_still()
             return
@@ -739,10 +777,31 @@ class Window(QMainWindow):
         for i, (name, value) in enumerate(facts):
             metric = QFrame()
             metric.setObjectName('metricCard')
+            # Equal columns: a card's contents must never decide how wide its column is.
+            metric.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            metric.setMinimumWidth(0)
             box = QVBoxLayout(metric)
             box.setContentsMargins(14, 10, 14, 10)
             box.setSpacing(4)
-            box.addWidget(label(name, 'eyebrow'))
+            caption = label(name, 'eyebrow')
+            switch = None
+            if i == 0 and clip_duration.get('real_time'):
+                # One reading at a time: timecode or clock duration, switched from the card's corner.
+                heading = QHBoxLayout()
+                heading.setSpacing(4)
+                caption.setMinimumWidth(0)
+                heading.addWidget(caption)
+                heading.addStretch()
+                switch = QToolButton()
+                switch.setObjectName('durationSwitch')
+                switch.setCursor(Qt.PointingHandCursor)
+                switch.setStyleSheet('QToolButton { padding: 0px 5px; border: 1px solid #3a4756; border-radius: 8px; background: transparent; color: #949eac; font-size: 12px; } QToolButton:hover { color: #e4e8ec; border-color: #56657a; }')
+                switch.setText('⇄')
+                switch.setFixedHeight(18)
+                heading.addWidget(switch)
+                box.addLayout(heading)
+            else:
+                box.addWidget(caption)
             text = ElidedLabel(value, 'metric')
             text.setMinimumHeight(29)
             if i == 0:
@@ -750,8 +809,24 @@ class Window(QMainWindow):
                 text.setToolTip(value + '\n' + clip_duration['note'])
                 text.setAccessibleName('Duration: ' + value + '. ' + clip_duration['note'])
             box.addWidget(text)
+            if switch is not None:
+                both = f"Timecode {value} {clip_duration['mode']} · Actual {clip_duration['real_time']}\n" + clip_duration['note']
+                def show_duration(actual, caption=caption, text=text, switch=switch, timecode=value, title=name):
+                    caption.setText('DURATION · ACTUAL' + (' · EST.' if clip_duration['estimated'] else '') if actual else title)
+                    text.setText(clip_duration['real_time'] if actual else timecode)
+                    text.setToolTip(both)  # Setting the text resets the tooltip; keep both readings there.
+                    switch.setToolTip('Show the duration as timecode (hours:minutes:seconds:frames).' if actual else 'Show the actual clock duration (hours:minutes:seconds.milliseconds).\nNon-drop timecode at this frame rate runs 0.1% slower than a clock.')
+                    switch.setAccessibleName('Switch duration to timecode' if actual else 'Switch duration to actual time')
+                    text.setAccessibleName(('Actual duration: ' + clip_duration['real_time']) if actual else ('Duration: ' + timecode + '. ' + clip_duration['note']))
+                    self.duration_actual = actual
+                    self.settings.setValue('duration_actual', actual)
+                switch.clicked.connect(lambda checked=False, show=show_duration: show(not self.duration_actual))
+                show_duration(self.settings.value('duration_actual', False, type=bool))
+                self.duration_switch, self.duration_value, self.duration_caption = switch, text, caption
             self.delivery.bind(text,[['duration_min','duration_max'],[],['width','height'],['fps']][i],'Video 1' if i in (2,3) else 'File')
             metrics.addWidget(metric, i // 2, i % 2)
+        metrics.setColumnStretch(0, 1)
+        metrics.setColumnStretch(1, 1)
         detail_layout.addLayout(metrics, 1)
         tc = clip_timecode(data)
         timecode = QFrame()
@@ -831,6 +906,7 @@ class Window(QMainWindow):
                          ('Display', display_description(stream) if self.settings.value('color_mode', 'auto') == 'auto' else 'Native rendering'),
                          ('Profile', stream.get('profile', 'Not reported')),
                          ('Pixel format', stream.get('pix_fmt', 'Not reported')),
+                         ('Bit depth', f'{video_bit_depth(stream)}-bit' if video_bit_depth(stream) else 'Not reported'),
                          ('Color space', stream.get('color_space', 'Not reported')),
                          ('Transfer', stream.get('color_transfer', 'Not reported'))]
             elif kind == 'audio':
@@ -871,8 +947,9 @@ class Window(QMainWindow):
             self.audio_selector.currentIndexChanged.connect(audio_pages.setCurrentIndex)
             self.audio_selector.currentIndexChanged.connect(self.playback.set_audio_track)
             audio_card.content.addWidget(audio_pages)
-            audio_card.content.addWidget(self.audio_tools())
-            audition=QPushButton('Channels · Solo / Mute / Phase…');audition.clicked.connect(self.playback.show_audio_channels);audio_card.content.addWidget(audition)
+            loudness=self.new_loudness_box()
+            loudness_heading=QHBoxLayout();loudness_heading.addWidget(label('LOUDNESS','eyebrow'));loudness_heading.addStretch();loudness_heading.addWidget(loudness.measure)
+            audio_card.content.addLayout(loudness_heading);audio_card.content.addWidget(loudness)
             audio_card.content.addStretch()
             cards.append(audio_card)
         cards.extend(card for kind, card in overview_cards if kind != 'video')
@@ -883,10 +960,11 @@ class Window(QMainWindow):
         track_grid.setColumnStretch(0, 1)
         track_grid.setColumnStretch(1, 1)
         self.overview_layout.addLayout(track_grid)
-        if fmt.get('tags'):
-            tags = self.rows(list(fmt['tags'].items()))
-            tags.layout().setContentsMargins(12, 8, 12, 12)
-            self.overview_layout.addWidget(Disclosure('File tags', tags))
+        sections = [('File tags', fmt.get('tags'))]
+        for stream in streams:
+            kind = 'Cover art' if stream.get('disposition', {}).get('attached_pic') else stream.get('codec_type', 'other').capitalize()
+            sections.append((f"{kind} · Track {stream.get('index', '?')} tags", stream.get('tags')))
+        self.fill_tags(sections)
         for chapter in data.get('chapters', []):
             self.card(self.stream_layout, f"Chapter {chapter.get('id', '?')}", [(k, json.dumps(v, ensure_ascii=False) if isinstance(v, dict) else str(v)) for k, v in chapter.items()])
         checks = findings(data)
@@ -905,7 +983,7 @@ class Window(QMainWindow):
         self.playback = ClipPlayer(self.preview,self.path,self.settings,self.data,audio_only=True)
         self.audio_selector = AudioTrackBrowser(len(audios))
         self.audio_selector.setToolTip('Select the audio track to inspect and hear')
-        hero = QWidget(); hero.setFixedHeight(260)
+        hero = QWidget(); hero.setFixedHeight(294)
         layout = QHBoxLayout(hero);layout.setContentsMargins(0,0,0,0);layout.setSpacing(14)
         layout.addWidget(self.playback, 2)
         details = QWidget();right = QVBoxLayout(details);right.setContentsMargins(0,0,0,0);right.setSpacing(8)
@@ -913,7 +991,7 @@ class Window(QMainWindow):
         identity = QStackedWidget();identity.setSizePolicy(QSizePolicy.Ignored,QSizePolicy.Preferred)
         facts = QStackedWidget();facts.setSizePolicy(QSizePolicy.Ignored,QSizePolicy.Expanding)
         panels = QStackedWidget();panels.setSizePolicy(QSizePolicy.Ignored,QSizePolicy.Maximum)
-        all_tags = QWidget();tag_layout = QVBoxLayout(all_tags);tag_layout.setContentsMargins(12,8,12,12)
+        all_tags = QWidget();tag_layout = QVBoxLayout(all_tags);tag_layout.setContentsMargins(0,0,0,0)
         for index,stream in enumerate(audios):
             overview = audio_overview(self.data,stream)
             identity_panel = QWidget();titles = QVBoxLayout(identity_panel);titles.setContentsMargins(0,0,0,0);titles.setSpacing(2)
@@ -936,8 +1014,6 @@ class Window(QMainWindow):
             if overview['recording']:sections.append(('Recording',overview['recording']))
             for position,(title,rows) in enumerate(sections):
                 card=Section(title);card.content.setContentsMargins(16,12,16,12);card.content.setSpacing(7)
-                if title=='Sound details':
-                    audition=QPushButton('Channels…');audition.setObjectName('quiet');audition.setToolTip('Solo, mute, reported channel assignments and stereo phase');audition.clicked.connect(self.playback.show_audio_channels);card.content.itemAt(0).layout().addWidget(audition)
                 card.content.addWidget(self.rows(rows,compact=True,delivery_track=f'Audio {index+1}'))
                 if title == 'File details' and inline_music:
                     card.content.addWidget(label('MUSIC & RIGHTS','eyebrow'))
@@ -948,13 +1024,13 @@ class Window(QMainWindow):
             self.stream_layout.addWidget(Disclosure(f"Audio · Track {index+1} · {stream.get('codec_name','Unknown').upper()}",self.rows(technical),index==0))
             if stream.get('tags'):tag_layout.addWidget(Disclosure(f'Track {index+1} tags',self.rows(list(stream['tags'].items()),compact=True)))
         right.addWidget(identity);right.addWidget(facts,1);layout.addWidget(details,3)
-        self.overview_layout.addWidget(hero);self.overview_layout.addWidget(self.audio_tools());self.overview_layout.addWidget(panels)
+        self.overview_layout.addWidget(hero)
+        loudness_card=Section('Loudness');loudness_card.content.setContentsMargins(16,12,16,12);loudness_card.content.addWidget(self.new_loudness_box(horizontal=True))
+        self.overview_layout.addWidget(loudness_card);self.overview_layout.addWidget(panels)
         format_tags=self.data.get('format',{}).get('tags',{})
         if format_tags:tag_layout.insertWidget(0,self.rows(list(format_tags.items()),compact=True))
         if not tag_layout.count():tag_layout.addWidget(label('No descriptive tags embedded in this file.','muted'))
-        metadata_disclosure = Disclosure('All audio metadata',all_tags)
-        metadata_disclosure.setSizePolicy(QSizePolicy.Expanding,QSizePolicy.Maximum)
-        self.overview_layout.addWidget(metadata_disclosure)
+        self.tags_layout.addWidget(all_tags)
         self.audio_selector.currentIndexChanged.connect(identity.setCurrentIndex)
         self.audio_selector.currentIndexChanged.connect(facts.setCurrentIndex)
         self.audio_selector.currentIndexChanged.connect(panels.setCurrentIndex)
@@ -1233,6 +1309,7 @@ class Window(QMainWindow):
 
     def closeEvent(self, event):
         self.delivery.cancel()
+        self.stop_loudness()
         if self.tool_controller:self.tool_controller.close()
         self.settings.setValue('window_geometry',self.saveGeometry())
         self.settings.setValue('splitter_state',self.splitter.saveState())
@@ -1293,7 +1370,7 @@ def main():
     else:
         path=Path(window.settings.value('last_file',''))
         if path.is_file():window.inspect(str(path))
-        try:window.tabs.setCurrentIndex(max(0,min(3,int(window.settings.value('last_tab',0)))))
+        try:window.tabs.setCurrentIndex(max(0,min(window.tabs.count()-1,int(window.settings.value('last_tab',0)))))
         except (ValueError,TypeError):pass
     for path in app.pending_media:QTimer.singleShot(0,lambda p=path:open_requested(p))
     app.pending_media.clear()

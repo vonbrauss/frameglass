@@ -157,5 +157,29 @@ class AuditionTests(unittest.TestCase):
      player.monitor_unavailable('no device');self.assertEqual(player.monitor_mode,('native',));self.assertFalse(player.monitor_routed());self.assertEqual(player.monitor_note,'no device')
      player.set_audio_track(1);self.assertEqual(player.monitor_mode,('native',));player.set_audio_track(0);self.assertEqual(player.monitor_mode,('mixdown',))
      self.assertEqual(len(changes),4);player.dispose();player.deleteLater();QTest.qWait(20)
+ def test_player_chips_meter_and_loudness_box(self):
+    from frameglass.player import ClipPlayer
+    from frameglass.design import Preview
+    from frameglass.audio_monitor import LoudnessBox
+    with tempfile.TemporaryDirectory() as temp:
+     settings=QSettings(str(Path(temp)/'settings.ini'),QSettings.IniFormat)
+     data={'streams':[{'codec_type':'audio','channels':6,'channel_layout':'5.1'},{'codec_type':'audio','channels':2,'channel_layout':'stereo'}]}
+     player=ClipPlayer(Preview(),'/private/tmp/frameglass-test.mp4',settings,data);chips=player.chips;meter=player.meter
+     self.assertEqual([button.text() for button,mode in chips.buttons],['Stereo mixdown','L / R','C','More ▾']);self.assertEqual(chips.audition.text(),'Solo / Mute / Phase…');self.assertTrue(chips.buttons[0][0].isChecked())
+     self.assertEqual([bar[0] for bar in meter.bars],['L','R','C','LFE','Ls','Rs','Lo','Ro']);self.assertFalse(meter.bars[3][3]);self.assertTrue(player.monitor_row)
+     chips.buttons[2][0].click();self.assertEqual(player.monitor_mode,('channel',2));self.assertTrue(chips.buttons[2][0].isChecked());self.assertFalse(chips.buttons[0][0].isChecked())
+     self.assertEqual([bar[3] for bar in meter.bars],[False,False,True,False,False,False])
+     player.set_monitor(('pair',4,5));self.assertEqual(chips.buttons[3][0].text(),'Ls / Rs ▾');self.assertTrue(chips.buttons[3][0].isChecked());self.assertFalse(chips.buttons[2][0].isChecked())
+     player.set_monitor(('native',));self.assertEqual(chips.buttons[3][0].text(),'Player default ▾');self.assertEqual([bar[3] for bar in meter.bars],[True]*6)
+     meter.show_levels(np.full((8,6),.5,np.float32),['L','R','C','LFE','Ls','Rs'],player.monitored_channels(6))
+     self.assertAlmostEqual(meter.bars[2][1],-6.02,places=1);self.assertEqual(len(meter.bars),6);meter.timer.stop()
+     wide=meter.maximumWidth();player.set_audio_track(1);self.assertEqual([button.text() for button,mode in chips.buttons],['Stereo','Single channel ▾'])
+     self.assertEqual([bar[0] for bar in meter.bars],['L','R']);self.assertLess(meter.maximumWidth(),wide)
+     box=LoudnessBox(player,'/private/tmp/frameglass-test.mp4',data,settings);self.assertEqual(box.values['integrated_lufs'].text(),'Not measured')
+     data['audio_measurements']={'1':{'integrated_lufs':'-24.1','true_peak_dbfs':'-3.2','loudness_range_lu':'9.4'}};box.refresh_results()
+     self.assertEqual(box.values['integrated_lufs'].text(),'Not measured');player.set_audio_track(0)
+     self.assertEqual([box.values[key].text() for key in ('integrated_lufs','true_peak_dbfs','loudness_range_lu')],['-24.1 LUFS','-3.2 dBTP','9.4 LU'])
+     silent=ClipPlayer(Preview(),'/private/tmp/frameglass-test.mp4',settings,{});self.assertFalse(silent.monitor_row);self.assertTrue(silent.meter.isHidden());self.assertTrue(silent.chips.isHidden())
+     box.cancel();player.dispose();silent.dispose();box.deleteLater();player.deleteLater();silent.deleteLater();QTest.qWait(20)
 
 if __name__=='__main__':unittest.main()

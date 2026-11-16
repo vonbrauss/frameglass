@@ -124,3 +124,15 @@ class TimecodeTests(unittest.TestCase):
         self.assertEqual(playhead_timecode(sample(), 2000), 'TC 01:00:01:23')
         self.assertEqual(playhead_timecode(sample(tags={}), 1000), 'Rel 00:00:01:00')
         self.assertEqual(playhead_timecode({'streams': []}, 1000), 'Time 00:00:01.000')
+
+    def test_real_time_accompanies_fractional_non_drop_durations_only(self):
+        def clip(rate, frames):
+            return {'streams': [{'codec_type': 'video', 'r_frame_rate': rate, 'avg_frame_rate': rate, 'nb_frames': str(frames)}]}
+        film = duration_timecode(clip('24000/1001', 481))
+        self.assertEqual((film['value'], film['mode'], film['real_time']), ('00:00:20:01', 'NDF', '00:00:20.062'))
+        hour = duration_timecode(clip('24000/1001', 86400))
+        self.assertEqual((hour['value'], hour['real_time']), ('01:00:00:00', '01:00:03.600'))
+        self.assertIsNone(duration_timecode(clip('24/1', 480))['real_time'])
+        self.assertIsNone(duration_timecode(clip('25/1', 500))['real_time'])
+        self.assertIsNone(duration_timecode(clip('30000/1001', 600))['real_time'])
+        self.assertIsNone(duration_timecode({'streams': []})['real_time'])

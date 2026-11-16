@@ -54,7 +54,7 @@ class PresetEditor(QDialog):
         options={'type':['Video','Audio','Image'],'fps':['24000/1001','24','25','30000/1001','30','50','60000/1001','60'],
                  'scan':['Progressive','Interlaced · top field first','Interlaced · bottom field first'],
                  'primaries':['bt709','bt2020'],'transfer':['bt709','arib-std-b67','smpte2084','iec61966-2-1'],
-                 'matrix':['bt709','bt2020nc','rgb'],'pixel_format':['yuv420p','yuv422p10le','yuv420p10le','rgb24'],'video_codec':['h264','hevc','prores','dnxhd'],
+                 'matrix':['bt709','bt2020nc','rgb'],'pixel_format':['yuv420p','yuv422p10le','yuv420p10le','rgb24'],'video_bits':['8','10','12'],'video_codec':['h264','hevc','prores','dnxhd'],
                  'audio_codec':['pcm_s24le','pcm_s16le','aac','mp3','flac'],
                  'width':['1920','3840','1280'],'height':['1080','2160','720'],'audio_tracks':['0','1','2','8'],
                  'channels':['1','2','6','8'],'sample_rate':['48000','44100','96000'],'bits':['16','24','32'],

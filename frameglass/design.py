@@ -137,6 +137,9 @@ def icon(name, color='#9baabb', size=20):
         p.drawLine(4, 4, 4, 20); p.drawLine(4, 20, 20, 20); p.drawLine(20, 20, 20, 14)
         p.drawLine(4, 4, 10, 4); p.drawLine(12, 12, 21, 3)
         p.drawLine(21, 3, 14, 3); p.drawLine(21, 3, 21, 10)
+    elif name == 'fullscreen':
+        for x, y, dx, dy in ((4, 4, 1, 1), (20, 4, -1, 1), (4, 20, 1, -1), (20, 20, -1, -1)):
+            p.drawLine(x, y, x + 5 * dx, y); p.drawLine(x, y, x, y + 5 * dy)
     elif name == 'arrow':
         p.drawLine(4, 12, 20, 12); p.drawLine(20, 12, 14, 6); p.drawLine(20, 12, 14, 18)
     else:
@@ -215,13 +218,16 @@ class MediaHero(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(14)
         details.setMinimumWidth(370)
-        row.addWidget(preview, 1)
-        row.addWidget(details, 1)
-        self.setFixedHeight(258)
+        # A player with audio carries meters beside the picture and a chip row below it.
+        self.monitor_row = bool(getattr(preview, 'monitor_row', False))
+        self.extra = 34 if self.monitor_row else 0
+        row.addWidget(preview, 5 if self.monitor_row else 1)
+        row.addWidget(details, 4 if self.monitor_row else 1)
+        self.setFixedHeight(258 + self.extra)
 
     def resizeEvent(self, event):
         # Preserve a generous picture at wide sizes without making the hero tall.
-        height = max(244, min(270, round((self.width() - 14) / 2 * 9 / 16)))
+        height = max(244, min(270, round((self.width() - 14) / 2 * 9 / 16))) + self.extra
         if self.height() != height:
             self.setFixedHeight(height)
         super().resizeEvent(event)

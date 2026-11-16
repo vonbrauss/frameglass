@@ -116,3 +116,33 @@ class QualityWorkspaceTests(unittest.TestCase):
     from frameglass.quality import capture
     with self.assertRaises(TimeoutError) as raised:capture([sys.executable,'-c','import time; time.sleep(5)'],Event(),timeout=.3)
     self.assertIn('0.3 seconds',str(raised.exception))
+ def test_learned_preset_passes_its_source_and_flags_differences(self):
+    from frameglass.quality import preset_from_media
+    preset=preset_from_media(VIDEO,'Match reference');rules=preset['rules']
+    self.assertEqual(preset['name'],'Match reference');self.assertEqual(rules['width'],1920);self.assertEqual(rules['fps'],'60000/1001');self.assertEqual(rules['sample_rate'],48000)
+    self.assertEqual(rules['audio_tracks'],1);self.assertNotIn('transfer',rules);self.assertNotIn('duration_min',rules);self.assertNotIn('timecode_required',rules)
+    self.assertEqual(preset_status(check_preset(VIDEO,preset)),'Pass')
+    other=copy.deepcopy(VIDEO);other['streams'][0]['width']=1280;other['streams'][1]['channels']=6
+    states={row['key']:row['status'] for row in check_preset(other,preset)}
+    self.assertEqual(states['width'],'Mismatch');self.assertEqual(states['channels'],'Mismatch');self.assertEqual(states['height'],'Pass')
+    mixed=copy.deepcopy(VIDEO);mixed['streams'].append({'index':2,'codec_type':'audio','codec_name':'aac','channels':6,'sample_rate':'48000'})
+    learned=preset_from_media(mixed,'Mixed')['rules'];self.assertNotIn('channels',learned);self.assertEqual(learned['sample_rate'],48000);self.assertEqual(learned['audio_tracks'],2)
+    self.assertEqual(preset_status(check_preset(mixed,preset_from_media(mixed,'Mixed'))),'Pass')
+ def test_video_bit_depth_is_a_delivery_rule_and_is_learned(self):
+    from frameglass.quality import preset_from_media,RULES
+    from frameglass.workspace import PresetEditor
+    self.assertEqual(RULES['video_bits'],'Video bit depth')
+    ten=copy.deepcopy(VIDEO);ten['streams'][0]['pix_fmt']='yuv422p10le';eight=copy.deepcopy(VIDEO);eight['streams'][0]['pix_fmt']='yuv420p'
+    learned=preset_from_media(ten,'Ten bit');self.assertEqual(learned['rules']['video_bits'],10)
+    self.assertEqual({r['key']:r['status'] for r in check_preset(ten,learned)}['video_bits'],'Pass')
+    self.assertEqual({r['key']:r['status'] for r in check_preset(eight,learned)}['video_bits'],'Mismatch')
+    self.assertEqual({r['key']:r['status'] for r in check_preset(VIDEO,{'name':'x','rules':{'video_bits':10}})}['video_bits'],'Unknown')
+    self.assertNotIn('video_bits',preset_from_media(VIDEO,'Unreported')['rules'])
+    editor=PresetEditor(learned);self.assertEqual(editor.fields['video_bits'].currentText(),'10');editor.close()
+ def test_learning_specs_saves_selects_and_highlights(self):
+    inspector=Window(self.settings);inspector.show();inspector.inspect(str(self.root/'clip.mp4'));until(lambda:inspector.data is not None)
+    inspector.learn_specs('Match clip');names=[p['name'] for p in json.loads(self.settings.value('delivery_presets'))]
+    self.assertIn('Match clip',names);self.assertEqual(inspector.delivery.presets.currentText(),'Match clip');self.assertTrue(inspector.delivery.highlight.isChecked())
+    self.assertEqual(preset_status(inspector.delivery.checks),'Pass')
+    inspector.learn_specs('Match clip');self.assertEqual([p['name'] for p in json.loads(self.settings.value('delivery_presets'))].count('Match clip'),1)
+    inspector.close();QTest.qWait(50)

@@ -10,6 +10,7 @@ COLORS={'Pass':'#a4dacf','Mismatch':'#f2aaa9','Unknown':'#ecc78e'}
 
 class DeliveryBar(QWidget):
     editRequested=Signal(str)
+    learnRequested=Signal()
     def __init__(self,settings,parent=None):
         super().__init__(parent);self.settings=settings;self.data=None;self.path=None;self.bindings=[];self.checks=[];self.job=None;self.token=0
         self.setSizePolicy(QSizePolicy.Fixed,QSizePolicy.Fixed)
@@ -32,6 +33,7 @@ class DeliveryBar(QWidget):
         self.measure=QPushButton('Measure audio');self.measure.clicked.connect(self.toggle_measurement);layout.addWidget(self.measure);self.measure.hide()
         footer=QHBoxLayout()
         legend=QLabel('Green · match    Red · mismatch    Amber · unknown');legend.setObjectName('muted');footer.addWidget(legend,1)
+        self.learn_button=QPushButton('Learn from this clip…');self.learn_button.setObjectName('quiet');self.learn_button.setToolTip('Save the loaded clip\'s specs as a preset, then open other clips to see what matches and what differs.');self.learn_button.clicked.connect(self.learn);footer.addWidget(self.learn_button)
         self.edit_button=QPushButton('Edit delivery presets…');self.edit_button.setObjectName('quiet');self.edit_button.clicked.connect(self.edit_presets);footer.addWidget(self.edit_button);layout.addLayout(footer)
         self.popup.setMinimumWidth(660);self.popup.resize(660,340)
         self.signals=MeasurementSignals(self);self.signals.ready.connect(self.measured,Qt.QueuedConnection);self.signals.progress.connect(self.progress,Qt.QueuedConnection)
@@ -67,7 +69,7 @@ class DeliveryBar(QWidget):
         self.summary.setStyleSheet('color: '+COLORS.get(state,'#9baabb')+';')
         self.summary.setToolTip(' · '.join(f'{n} {s.lower()}' for s,n in counts.items())+' · Click for all requirements')
         self.label.setToolTip((self.presets.currentText()+' · '+state+'\n' if preset else '')+'Choose a delivery preset and view the specs being evaluated')
-        self.refresh_table()
+        self.refresh_table();self.learn_button.setEnabled(bool(self.data))
         measured=bool(preset and MEASURED_RULES.intersection(preset['rules']))
         self.measure.setVisible(measured);self.measure.setEnabled(bool(self.data and any(s.get('codec_type')=='audio' for s in self.data.get('streams',[]))))
         if not self.job:self.measure.setText('Measure audio')
@@ -88,6 +90,10 @@ class DeliveryBar(QWidget):
         if preset and not rows:
             rows=[('All applicable',RULES.get(key,key),str(value),'—','Not checked') for key,value in preset['rules'].items()]
         QualityWorkspace.fill_table(self.check_table,rows)
+
+    def learn(self):
+        self.popup.hide()
+        QTimer.singleShot(0,self.learnRequested.emit)
 
     def edit_presets(self):
         name=self.presets.currentText() if self.presets.currentData() else ''

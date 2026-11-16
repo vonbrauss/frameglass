@@ -138,23 +138,6 @@ class MonitorOutput:
             if written>0:del self.pending[:written];self.bytes_written+=written
 
 
-class MonitorSelector(QComboBox):
-    """Chooses what the selected audio track sends to the speakers and the meter."""
-    HELP='What you hear and what the meter shows. Stereo mixdown: left/right at full level, center and surrounds at -3 dB, LFE left out.\nMeasurements always read the whole track. Monitoring runs at 1x forward playback.'
-    def __init__(self,player,parent=None):
-        super().__init__(parent);self.player=player;self.options=[];self.setAccessibleName('Audio monitor');self.setMinimumWidth(150)
-        self.currentIndexChanged.connect(self.chosen);player.monitorChanged.connect(self.reload);self.reload()
-    def reload(self):
-        self.options=self.player.monitor_choices();self.blockSignals(True);self.clear()
-        self.addItems([title for title,mode in self.options])
-        self.setCurrentIndex(next((i for i,(title,mode) in enumerate(self.options) if mode==self.player.monitor_mode),0))
-        self.blockSignals(False);self.setEnabled(len(self.options)>1)
-        note=self.player.monitor_note
-        self.setToolTip(self.HELP+('\n\nUsing the player default: '+note if note else ''))
-    def chosen(self,index):
-        if 0<=index<len(self.options):self.player.set_monitor(self.options[index][1])
-
-
 class ChannelPanel(QDialog):
     def __init__(self,player):
         super().__init__(player);self.player=player;self.setWindowTitle('Frameglass · Audio channels');self.resize(560,360);self.last_ui=0;self.smoothed=None

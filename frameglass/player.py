@@ -3,6 +3,7 @@ from pathlib import Path
 from threading import Event
 
 import numpy as np
+from shiboken6 import isValid
 
 from PySide6.QtCore import QEvent, QSize, Qt, QUrl, QTimer, QElapsedTimer, QThreadPool, Signal
 from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut, QPainter, QColor
@@ -16,7 +17,7 @@ from .audition import MonitorOutput,ChannelPanel,pcm_samples,monitor_mix,channel
 from .core import duration
 from .design import icon, tool_button, Preview
 from .color import display_transform, ColorJob, ColorSignals
-from .inspection_tools import PictureGuides, LevelMeter
+from .audio_monitor import ChannelMeter, MonitorChips
 from .timecode import playhead_timecode, media_tracks, positive_fraction, duration_timecode
 
 
@@ -89,7 +90,7 @@ class ClipPlayer(QFrame):
         self.pending_color_frame = None
         self.selected_audio_track = 0
         self.audition_solos=set();self.audition_mutes=set();self.audition_mono=False
-        self.channel_panel=None;self.monitor=MonitorOutput(self)
+        self.channel_panel=None;self.monitor=MonitorOutput(self);self.channel_meters=[]
         self.reset_monitor()
         self.speed = 0
         self.held_k = False
@@ -116,18 +117,6 @@ class ClipPlayer(QFrame):
         self.stack = QStackedWidget()
         self.stack.setMinimumSize(0, 100)
         self.stack.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
-        videos,_=media_tracks(data)
-        source=videos[0] if videos else {}
-        dar=positive_fraction(str(source.get('display_aspect_ratio','')).replace(':','/'))
-        sar=positive_fraction(str(source.get('sample_aspect_ratio','1:1')).replace(':','/')) or 1
-        aspect=float(dar) if dar else float((source.get('width') or 16)*sar/(source.get('height') or 9))
-        rotation=next((s.get('rotation',0) for s in source.get('side_data_list',[]) if 'rotation' in s),source.get('tags',{}).get('rotate',0))
-        try:
-            if abs(float(rotation))%180==90:aspect=1/aspect
-        except (ValueError,TypeError):pass
-        self.guides=PictureGuides(self.stack,aspect)
-        self.stack.installEventFilter(self)
-        self.stack.currentChanged.connect(self.raise_guides)
         self.fullscreen_dialog=None
         poster = QWidget()
         poster_layout = QGridLayout(poster)
@@ -153,7 +142,20 @@ class ClipPlayer(QFrame):
         self.error_label.hide()
         poster_layout.addWidget(self.error_label, 0, 0, Qt.AlignBottom)
         self.stack.addWidget(poster)
-        layout.addWidget(self.stack, 1)
+        # Picture and channel meters share one row, so levels are read without looking away.
+        has_audio = bool(media_tracks(data)[1])
+        self.monitor_row = has_audio
+        self.meter = ChannelMeter(stretch=audio_only)
+        self.meter.setVisible(has_audio)
+        if has_audio and not audio_only:
+            self.stack.setMinimumSize(160, 100)
+        self.screen_area = QWidget()
+        picture_row = QHBoxLayout(self.screen_area)
+        picture_row.setContentsMargins(0, 0, 4 if has_audio else 0, 0)
+        picture_row.setSpacing(6)
+        picture_row.addWidget(self.stack, 1)
+        picture_row.addWidget(self.meter, 1 if audio_only else 0)
+        layout.addWidget(self.screen_area, 1)
         controls = QHBoxLayout()
         controls.setContentsMargins(3, 2, 3, 2)
         controls.setSpacing(2)
@@ -203,26 +205,19 @@ class ClipPlayer(QFrame):
         controls.addWidget(self.volume_button)
         self.external_button = tool_button('external', 'Open clip in default player', self.open_external)
         controls.addWidget(self.external_button)
-        self.viewer_button=tool_button('settings','Viewer tools',lambda:None)
-        viewer_menu=QMenu(self.viewer_button)
-        if not audio_only:
-            viewer_menu.addAction('Previous frame · hold K + J',lambda:self.step(-1))
-            viewer_menu.addAction('Next frame · hold K + L',lambda:self.step(1))
-            viewer_menu.addAction('Fullscreen viewer',self.show_fullscreen)
-            guide_action=viewer_menu.addAction('90% / 80% picture guides')
-            guide_action.setCheckable(True);guide_action.toggled.connect(self.set_guides)
-        if media_tracks(data)[1]:viewer_menu.addAction('Audio channels · Solo / Mute / Phase…',self.show_audio_channels)
-        has_audio=bool(media_tracks(data)[1])
-        show_meter=has_audio and settings.value('audio_meter',True,type=bool)
-        meter_action=viewer_menu.addAction('Monitor peak meter (before volume)');meter_action.setCheckable(True);meter_action.setChecked(show_meter);meter_action.setEnabled(has_audio)
-        self.level_meter=LevelMeter();self.level_meter.setVisible(show_meter);meter_action.toggled.connect(self.level_meter.setVisible)
-        meter_action.toggled.connect(lambda shown:settings.setValue('audio_meter',shown))
-        self.viewer_button.setMenu(viewer_menu);self.viewer_button.setPopupMode(QToolButton.InstantPopup);controls.addWidget(self.viewer_button)
-        for button in (self.play_button, self.volume_button, self.external_button, self.viewer_button):
+        self.fullscreen_button=tool_button('fullscreen','Fullscreen viewer',self.show_fullscreen)
+        self.fullscreen_button.setVisible(not audio_only)
+        controls.addWidget(self.fullscreen_button)
+        for button in (self.play_button, self.volume_button, self.external_button, self.fullscreen_button):
             button.setFixedSize(26, 28)
             button.setIconSize(QSize(16, 16))
         layout.addLayout(controls)
-        layout.addWidget(self.level_meter)
+        self.chips = MonitorChips(self)
+        self.chips.setVisible(has_audio)
+        layout.addWidget(self.chips)
+        self.attach_meter(self.meter)
+        self.monitorChanged.connect(self.refresh_meter)
+        self.refresh_meter()
         self.overlay.setVisible(playable)
         self.play_button.setEnabled(playable)
         self.shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
@@ -287,30 +282,29 @@ class ClipPlayer(QFrame):
             first=not self.audio_frame_seen
             self.audio_frame_seen=True
             if first:QTimer.singleShot(0,self.apply_audio_track)
-        metering=self.level_meter.isVisible()
-        if not (metering or self.monitor_routed() or (self.channel_panel and self.channel_panel.isVisible())):return
+        panel_meters=[meter for meter in self.channel_meters if isValid(meter) and meter.isVisible()]
+        if not (panel_meters or self.monitor_routed() or (self.channel_panel and self.channel_panel.isVisible())):return
         samples=pcm_samples(buffer)
-        if samples is None:
-            if metering:self.level_meter.set_buffer(buffer)
-            return
+        if samples is None:return
         if self.channel_panel:self.channel_panel.samples(samples)
         labels=self.track_labels();matched=len(labels)==samples.shape[1]
-        # The meter shows the monitored signal; without routing that is the decoded track itself.
-        meter,names=samples,(short_labels(labels) if matched else None)
+        source_names=short_labels(labels) if matched else None
+        mix_out,mix_names=None,()
         if self.monitor_routed():
             try:
                 if not matched:raise ValueError('Decoder channel count differs from the source layout. Channel monitoring is unavailable for this track.')
                 if self.audition_active():
-                    mix=monitor_mix(samples,labels,self.audition_solos,self.audition_mutes,self.audition_mono);meter,names=mix,['L','R']
+                    mix=monitor_mix(samples,labels,self.audition_solos,self.audition_mutes,self.audition_mono)
+                    mix_out,mix_names=mix,('L','R')
                 else:
-                    weights,meter_weights,names=self.monitor_route
-                    mix=samples@weights;meter=samples@meter_weights  # Metered before clipping, so overs stay visible.
+                    mix=samples@self.monitor_route[0]  # Metered before clipping, so overs stay visible.
+                    if self.monitor_mode==('mixdown',):mix_out,mix_names=mix,('Lo','Ro')
                 if self.player and self.player.playbackState()==QMediaPlayer.PlayingState and self.speed==1:
                     self.monitor.write(np.ascontiguousarray(np.clip(mix,-1,1),dtype='<f4'),buffer.format().sampleRate(),self.volume.value()/100)
             except Exception as error:
                 self.monitor_unavailable(str(error))
-                meter,names=samples,(short_labels(labels) if matched else None)
-        if metering:self.level_meter.set_samples(meter,names)
+                mix_out,mix_names=None,()
+        for panel_meter in panel_meters:panel_meter.show_levels(samples,source_names,self.monitored_channels(samples.shape[1]),mix_out,mix_names)
 
     def audition_active(self):return bool(self.audition_solos or self.audition_mutes or self.audition_mono)
 
@@ -330,6 +324,21 @@ class ClipPlayer(QFrame):
 
     def monitor_routed(self):return self.audition_active() or self.monitor_route is not None
 
+    def refresh_meter(self):
+        """Name the meter's bars for the selected track and monitor before any audio plays."""
+        labels=self.track_labels()
+        self.meter.set_channels(short_labels(labels),self.monitored_channels(len(labels)),('Lo','Ro') if self.monitor_mode==('mixdown',) else ())
+
+    def attach_meter(self,meter):
+        """Send decoded levels to another meter, such as the audio panel's."""
+        self.channel_meters.append(meter)
+
+    def monitored_channels(self,count):
+        """Which channels of the selected track currently reach the speakers."""
+        if self.audition_active():return [i not in self.audition_mutes and (not self.audition_solos or i in self.audition_solos) for i in range(count)]
+        if self.monitor_route is None or len(self.monitor_route[0])!=count:return [True]*count
+        return [bool(self.monitor_route[0][i].any()) for i in range(count)]
+
     def monitor_unavailable(self,message):
         self.monitor.reset()
         if self.channel_panel:self.channel_panel.status.setText('Monitoring unavailable: '+message)
@@ -344,36 +353,31 @@ class ClipPlayer(QFrame):
         # instead of leaking the other channels.
         routed=self.audition_active() or (self.monitor_route is not None and (self.monitor_mode!=('mixdown',) or self.speed in (0,1)))
         if self.audio:self.audio.setMuted(routed)
-        self.viewer_button.setToolTip('Viewer tools · channel monitoring active' if self.audition_active() else 'Viewer tools')
+        chips=getattr(self,'chips',None)
+        if chips is not None:chips.show_audition(self.audition_active())
 
     def show_audio_channels(self):
         if self.disposed or not media_tracks(self.data)[1]:return
         if self.channel_panel is None:self.channel_panel=ChannelPanel(self)
         self.channel_panel.show();self.channel_panel.raise_();self.channel_panel.activateWindow()
 
-    def set_guides(self,enabled):
-        self.guides.setVisible(enabled);self.raise_guides()
-
-    def raise_guides(self,*args):
-        self.guides.setGeometry(self.stack.rect());self.guides.raise_()
-
     def show_fullscreen(self):
         if self.fullscreen_dialog or self.disposed:return
         self.shortcut.setEnabled(False)
         dialog=QDialog(self);dialog.setWindowTitle('Frameglass · Viewer');self.fullscreen_dialog=dialog
-        layout=QVBoxLayout(dialog);layout.setContentsMargins(0,0,0,0);layout.addWidget(self.stack,1)
+        layout=QVBoxLayout(dialog);layout.setContentsMargins(0,0,0,0);layout.addWidget(self.screen_area,1)
         row=QHBoxLayout()
         for title,callback in [('Previous frame',lambda:self.step(-1)),('Play / pause',self.toggle),('Next frame',lambda:self.step(1)),('Exit fullscreen',dialog.close)]:
             from PySide6.QtWidgets import QPushButton
             button=QPushButton(title);button.clicked.connect(callback);row.addWidget(button)
         layout.addLayout(row)
         shortcut=QShortcut(QKeySequence(Qt.Key_Space),dialog);shortcut.activated.connect(self.toggle)
-        dialog.finished.connect(self.restore_fullscreen);dialog.showFullScreen();self.raise_guides()
+        dialog.finished.connect(self.restore_fullscreen);dialog.showFullScreen()
 
     def restore_fullscreen(self,*args):
         dialog=self.fullscreen_dialog
         if not dialog:return
-        self.layout().insertWidget(0,self.stack,1);self.stack.show();self.fullscreen_dialog=None;dialog.deleteLater()
+        self.layout().insertWidget(0,self.screen_area,1);self.screen_area.show();self.fullscreen_dialog=None;dialog.deleteLater()
         self.shortcut.setEnabled(not self.disposed and self.play_button.isEnabled())
 
     def set_audio_track(self, index):
@@ -657,8 +661,6 @@ class ClipPlayer(QFrame):
         QDesktopServices.openUrl(QUrl.fromLocalFile(self.path))
 
     def eventFilter(self, watched, event):
-        if watched is self.stack and event.type()==QEvent.Resize:
-            self.raise_guides()
         if watched in (self.preview, self.video, getattr(self, 'managed_view', None)) and event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
             self.toggle()
             return True

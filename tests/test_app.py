@@ -53,6 +53,30 @@ class InspectionTests(unittest.TestCase):
         self.assertIn('Failed', self.w.decode_state_label.text())
         self.assertIn('stopped unexpectedly', self.w.scan_log)
         self.assertIsNone(self.w.scan)
+    def test_tags_tab_sits_between_tracks_and_diagnostics(self):
+        self.w.inspect('/private/tmp/frameglass-test.mp4')
+        until(lambda: self.w.data is not None)
+        self.assertEqual([self.w.tabs.tabText(i) for i in range(self.w.tabs.count())], ['Overview', 'Tracks', 'Tags', 'Diagnostics', 'Metadata'])
+        self.assertGreater(self.w.tags_layout.count(), 0)
+        self.assertFalse(any(d.toggle.text() == 'File tags' for d in self.w.overview.findChildren(Disclosure)))
+    def test_duration_switches_between_timecode_and_actual_time(self):
+        import subprocess
+        from frameglass.core import executable
+        clip = Path(self.temp.name) / 'film.mov'
+        subprocess.run([executable('ffmpeg'), '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=24000/1001',
+                        '-frames:v', '48', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(clip)], check=True)
+        self.w.inspect(str(clip))
+        until(lambda: self.w.data is not None)
+        self.assertIsNotNone(self.w.duration_switch)
+        self.assertEqual((self.w.duration_caption.text(), self.w.duration_value.full_text), ('DURATION · NDF', '00:00:02:00'))
+        self.w.duration_switch.click()
+        self.assertEqual((self.w.duration_caption.text(), self.w.duration_value.full_text), ('DURATION · ACTUAL', '00:00:02.002'))
+        self.assertTrue(self.w.settings.value('duration_actual', False, type=bool))
+        self.w.duration_switch.click()
+        self.assertEqual(self.w.duration_value.full_text, '00:00:02:00')
+        self.w.inspect('/private/tmp/frameglass-test.mp4')
+        until(lambda: self.w.data is not None)
+        self.assertIsNone(self.w.duration_switch)
     def test_unreadable_file(self):
         path = Path('/private/tmp/frameglass-broken.mp4')
         path.write_bytes(b'not a video')
@@ -90,7 +114,7 @@ class InspectionTests(unittest.TestCase):
         self.assertFalse(audio.panel.isHidden())
 
     def test_drop_over_metadata_view(self):
-        self.w.tabs.setCurrentIndex(3)
+        self.w.tabs.setCurrentWidget(self.w.raw)
         mime = QMimeData()
         mime.setUrls([QUrl.fromLocalFile('/private/tmp/frameglass-test.mp4')])
         enter = QDragEnterEvent(self.w.raw.rect().center(), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier)

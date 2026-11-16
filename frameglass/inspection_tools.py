@@ -1,4 +1,4 @@
-"""Read-only viewer guides, display histograms, and measured audio analysis."""
+"""Display histograms, pixel readout, and measured audio analysis."""
 import json
 import math
 import re
@@ -10,22 +10,6 @@ from PySide6.QtGui import QPainter,QPen,QColor,QPainterPath,QImage
 from PySide6.QtWidgets import QWidget,QDialog,QVBoxLayout,QHBoxLayout,QPushButton,QLabel,QTextEdit,QProgressBar
 from .core import executable
 from .quality import capture,Cancelled
-
-
-class PictureGuides(QWidget):
-    def __init__(self,parent,aspect):
-        super().__init__(parent);self.aspect=aspect
-        self.setAttribute(Qt.WA_TransparentForMouseEvents);self.hide()
-    def paintEvent(self,event):
-        painter=QPainter(self);painter.setRenderHint(QPainter.Antialiasing)
-        w,h=self.width(),self.height()
-        if w/h>self.aspect:w=h*self.aspect
-        else:h=w/self.aspect
-        image=QRectF((self.width()-w)/2,(self.height()-h)/2,w,h)
-        painter.setPen(QPen(QColor(255,255,255,155),1,Qt.DashLine))
-        for fraction in (.9,.8):
-            x=image.width()*(1-fraction)/2;y=image.height()*(1-fraction)/2
-            painter.drawRect(image.adjusted(x,y,-x,-y))
 
 
 class Histogram(QWidget):
@@ -156,38 +140,6 @@ class AudioAnalysisDialog(QDialog):
         self.job.cancelled.set();self.progress.hide();self.cancel.setEnabled(False);self.details.setPlainText('Analysis cancelled. No complete measurement is available.')
     def reject(self):self.job.cancelled.set();super().reject()
     def closeEvent(self,event):self.job.cancelled.set();super().closeEvent(event)
-
-class LevelMeter(QWidget):
-    def __init__(self,parent=None):
-        super().__init__(parent);self.setFixedHeight(20);self.levels=[];self.names=None;self.setToolTip('Sample peaks of the monitored signal in dBFS, before the playback volume control. This is not a true-peak or loudness measurement.')
-    def set_samples(self,samples,names=None):
-        """Peaks of float samples (frames x channels), optionally with a name per channel."""
-        if samples is None or not len(samples):self.levels=[];self.names=None;self.update();return
-        peaks=np.max(np.abs(np.asarray(samples,dtype=np.float64)),axis=0)
-        self.levels=[20*math.log10(max(1e-9,float(p))) for p in peaks]
-        self.names=list(names) if names and len(names)==len(self.levels) else None;self.update()
-    def set_buffer(self,buffer):
-        from PySide6.QtMultimedia import QAudioFormat
-        self.names=None
-        if not buffer.isValid() or not buffer.frameCount():self.levels=[];self.update();return
-        fmt=buffer.format();kind=fmt.sampleFormat()
-        types={QAudioFormat.UInt8:('u1',128),QAudioFormat.Int16:('<i2',32768),QAudioFormat.Int32:('<i4',2147483648),QAudioFormat.Float:('<f4',1)}
-        if kind not in types:return
-        dtype,scale=types[kind];samples=np.frombuffer(buffer.constData(),dtype=dtype).reshape(-1,fmt.channelCount()).astype(np.float64)
-        if kind==QAudioFormat.UInt8:samples-=128
-        peaks=np.max(np.abs(samples/scale),axis=0)
-        self.levels=[20*math.log10(max(1e-9,float(p))) for p in peaks];self.update()
-    def paintEvent(self,event):
-        p=QPainter(self);p.setFont(self.font());count=max(1,len(self.levels));width=self.width()/count
-        if not self.levels:p.setPen(QColor('#8f9baa'));p.drawText(self.rect(),Qt.AlignCenter,'Sample peak · play to meter');return
-        for channel,level in enumerate(self.levels):
-            x=channel*width;p.fillRect(QRectF(x,2,width-4,4),QColor('#2d3742'))
-            p.fillRect(QRectF(x,2,max(0,min(1,(level+60)/60))*(width-4),4),QColor('#f2aaa9' if level>=0 else '#ecc78e' if level>-6 else '#a1d6c5'))
-            name=self.names[channel] if self.names else str(channel+1)
-            # More than two bars leave no room for units; the tooltip states them.
-            reading=(f'{level:.1f} dBFS' if count<=2 else f'{level:.0f}') if level>-90 else '−∞'
-            p.setPen(QColor('#9baabb'));p.drawText(QRectF(x,7,width-4,13),Qt.AlignCenter,f'{name}: {reading}' if count<=2 else f'{name} {reading}')
-
 
 class PixelLabel(QLabel):
     pixelChanged=Signal(str)

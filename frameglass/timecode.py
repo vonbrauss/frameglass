@@ -146,7 +146,7 @@ def duration_timecode(data):
     """
     from .core import duration
     video, _ = media_tracks(data)
-    result = dict(value=MISSING, mode='', estimated=False, frames=None,
+    result = dict(value=MISSING, mode='', estimated=False, frames=None, real_time=None,
                   note='No reliable video frame rate or frame count is available.')
     if not video:
         result.update(value=duration(data.get('format', {}).get('duration')), mode='TIME',
@@ -180,6 +180,11 @@ def duration_timecode(data):
                       else 'Hours:minutes:seconds:frames. This rate uses non-drop counting.')
     result['note'] += (' Estimated from video duration.' if result['estimated'] else ' From the reported video frame count.')
     result['note'] += ' Duration counts every frame; it is not the last-frame Out value.'
+    if not drop and fps.denominator != 1:
+        # Non-drop counting at a fractional rate runs slower than a clock (3.6 s per hour),
+        # so the clock duration is given too. It uses the same frame count as the timecode.
+        result['real_time'] = duration(float(count / fps))
+        result['note'] += ' Real time is the clock duration of those frames; non-drop timecode at this rate runs 0.1% slower than a clock.'
     return result
 
 

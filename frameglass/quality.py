@@ -12,7 +12,7 @@ from PySide6.QtCore import QObject, QRunnable, Signal
 from PIL import Image, ImageSequence
 from .core import executable, probe_args, scan_args, duration, findings
 from .timecode import media_tracks, clip_timecode
-from .color import scan_mode
+from .color import scan_mode, video_bit_depth
 from .stills import STILL_EXTENSIONS, read_still
 
 MEDIA_EXTENSIONS = STILL_EXTENSIONS | {'.mov','.mp4','.m4v','.mxf','.mkv','.avi','.webm','.mts','.m2ts','.mpg','.mpeg','.ts','.vob','.wmv','.r3d','.braw','.wav','.wave','.aif','.aiff','.mp3','.m4a','.aac','.flac','.ogg','.opus','.wma','.caf','.mka','.ac3','.aiff','.mp2','.aifc','.m2v','.3gp'}
@@ -23,7 +23,7 @@ DEFAULT_PRESETS = [
     {'name':'Example · Stereo PCM 48 kHz', 'rules':{'type':'Audio','audio_codec':'pcm_s24le','audio_tracks':1,'channels':2,'sample_rate':48000,'bits':24}},
 ]
 RULES = {'type':'Media type','width':'Width','height':'Height','fps':'Frame rate','scan':'Scan','primaries':'Color primaries',
-         'transfer':'Transfer function','matrix':'Color matrix','pixel_format':'Pixel format',
+         'transfer':'Transfer function','matrix':'Color matrix','pixel_format':'Pixel format','video_bits':'Video bit depth',
          'video_codec':'Video codec','audio_codec':'Audio codec','audio_tracks':'Audio tracks','channels':'Channels per audio track','sample_rate':'Audio sample rate','bits':'Audio bit depth'}
 
 RULES.update({'container':'Container','bitrate_min':'Minimum total bitrate (Mb/s)','bitrate_max':'Maximum total bitrate (Mb/s)',
@@ -67,6 +67,8 @@ def measure_loudness(path,track,ffmpeg,cancelled):
         match=re.search(pattern,summary)
         if match:result[key]=match.group(1)
     if 'integrated_lufs' not in result or 'true_peak_dbfs' not in result:raise ValueError('No complete loudness summary was reported')
+    spread=re.search(r'LRA:\s+([\d.]+)\s+LU',summary)
+    if spread:result['loudness_range_lu']=spread.group(1)
     return result
 
 
@@ -146,10 +148,10 @@ def check_preset(data,preset):
         elif key in ('width','height') and data.get('kind')=='still':values=[('Image',data.get('image',{}).get(key))]
         elif key.startswith('video_bitrate_'):
             values=[(f'Video {i}',numeric(s.get('bit_rate'))/1000000 if numeric(s.get('bit_rate')) else None) for i,s in enumerate(video,1)] or [('File','No video tracks')]
-        elif key in ('width','height','fps','scan','primaries','transfer','matrix','pixel_format','video_codec'):
+        elif key in ('width','height','fps','scan','primaries','transfer','matrix','pixel_format','video_bits','video_codec'):
             values=[]
             for i,s in enumerate(video,1):
-                actual=(s.get('avg_frame_rate') or s.get('r_frame_rate')) if key=='fps' else scan_mode(s) if key=='scan' else s.get('color_primaries') if key=='primaries' else s.get('color_transfer') if key=='transfer' else s.get('color_space') if key=='matrix' else s.get('pix_fmt') if key=='pixel_format' else s.get('codec_name') if key=='video_codec' else s.get(key)
+                actual=video_bit_depth(s) if key=='video_bits' else (s.get('avg_frame_rate') or s.get('r_frame_rate')) if key=='fps' else scan_mode(s) if key=='scan' else s.get('color_primaries') if key=='primaries' else s.get('color_transfer') if key=='transfer' else s.get('color_space') if key=='matrix' else s.get('pix_fmt') if key=='pixel_format' else s.get('codec_name') if key=='video_codec' else s.get(key)
                 values.append((f'Video {i}',actual))
             if not values: values=[('File','No video tracks')]
         else:
@@ -168,11 +170,49 @@ def check_preset(data,preset):
                     state='Unknown' if math.isnan(number) or not math.isfinite(target) else 'Pass' if (number>=target if key.endswith('_min') else number<=target) else 'Mismatch'
                 except (ValueError,TypeError,OverflowError):state='Unknown'
             elif key=='fps':state='Unknown' if not numeric(expected) else 'Pass' if abs(numeric(actual)-numeric(expected)) < Fraction(1,1000) else 'Mismatch'
-            elif key in ('width','height','audio_tracks','channels','sample_rate','bits'):state='Pass' if numeric(actual)==numeric(expected) else 'Mismatch'
+            elif key in ('width','height','audio_tracks','channels','sample_rate','bits','video_bits'):state='Pass' if numeric(actual)==numeric(expected) else 'Mismatch'
             else:state='Pass' if str(actual).casefold()==str(expected).casefold() else 'Mismatch'
             rows.append({'key':key,'field':RULES[key],'track':track,'expected':str(expected),
                          'actual':('Not measured' if key in MEASURED_RULES else 'Not reported') if unknown(actual) else f'{float(actual):g}' if isinstance(actual,Fraction) and key in LIMIT_RULES else str(actual),'status':state})
     return rows
+
+
+def preset_from_media(data,name):
+    """Delivery preset describing one clip, for checking other clips against it.
+
+    Only reported values become rules, and a per-track rule is kept only when every
+    track of the clip agrees, so the clip always passes its own preset. Values that
+    naturally differ between matching clips (duration, bitrates, loudness) are left out.
+    """
+    video,audio=media_tracks(data);rules={'type':media_type(data)}
+    def learn(key,values,convert=str):
+        values=[v for v in values]
+        if values and not any(unknown(v) for v in values) and len({str(v).casefold() for v in values})==1:
+            try:rules[key]=convert(values[0])
+            except (ValueError,TypeError):pass
+    learn('container',[container_name(data)])
+    if data.get('kind')=='still':
+        image=data.get('image',{});learn('width',[image.get('width')],int);learn('height',[image.get('height')],int)
+        return {'name':name,'rules':rules}
+    if video:
+        learn('width',[s.get('width') for s in video],int);learn('height',[s.get('height') for s in video],int)
+        rates=[s.get('avg_frame_rate') or s.get('r_frame_rate') for s in video]
+        if all(numeric(rate) for rate in rates):learn('fps',[str(numeric(rate)) for rate in rates])
+        learn('scan',[None if scan_mode(s)=='Not reported' else scan_mode(s) for s in video])
+        learn('video_bits',[video_bit_depth(s) for s in video],int)
+        for key,field in (('primaries','color_primaries'),('transfer','color_transfer'),('matrix','color_space'),('pixel_format','pix_fmt'),('video_codec','codec_name')):
+            learn(key,[s.get(field) for s in video])
+    rules['audio_tracks']=len(audio)
+    if audio:
+        learn('audio_codec',[s.get('codec_name') for s in audio]);learn('channels',[s.get('channels') for s in audio],int)
+        learn('channel_layout',[s.get('channel_layout') for s in audio]);learn('sample_rate',[s.get('sample_rate') for s in audio],int)
+        learn('bits',[bit_depth(s) for s in audio],int)
+    if video:
+        timecode=clip_timecode(data)
+        if timecode['source'] and timecode['in_']!='Not available':
+            rules['timecode_required']='Present'
+            if timecode['mode']!='Not available':rules['timecode_mode']=timecode['mode']
+    return {'name':name,'rules':rules}
 
 
 def preset_status(rows):

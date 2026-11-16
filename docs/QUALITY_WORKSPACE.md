@@ -30,11 +30,11 @@ Analyze audio measures the currently selected audio track. The full-track scan r
 
 The waveform is a mono downmix envelope at 48 kHz, reduced to at most 1,500 min/max points. It is an overview, not a true-peak measurement or a per-channel phase display. Clicking seeks the inspector player. Copy analysis copies the measurements and silence regions as JSON. Full-track measurements are included in the inspector report after completion; cancellation leaves no complete measurement.
 
-Audio-only playback shows decoded per-channel sample-peak meters before the playback volume control. Video meters are optional in Viewer tools. Sample peaks, true peaks and loudness are different measurements.
+The meter beside the picture (beside the artwork for audio-only files) shows decoded per-channel sample peaks before the playback volume control. Sample peaks, true peaks and loudness are different measurements.
 
-## Viewer tools, copy and workspace
+## Fullscreen, copy and workspace
 
-Video Viewer tools adds previous/next-frame actions, fullscreen and optional 90%/80% picture guides. J/K/L remains available, including hold K and tap J/L to step. Fullscreen also provides frame-step/play controls; Escape exits it. Picture guides follow the display aspect ratio and rotation.
+The fullscreen button in the transport opens the fullscreen viewer. J/K/L remains available, including hold K and tap J/L to step. Fullscreen also provides frame-step/play controls; Escape exits it. Picture guides follow the display aspect ratio and rotation.
 
 Still-image hovering reads the displayed preview's pixel coordinates and RGB/alpha. These are color-managed preview values, not untouched sensor or high-bit-depth source samples. Histogram shows sampled displayed sRGB values, excludes fully transparent pixels and uses a logarithmic vertical scale.
 
@@ -58,7 +58,7 @@ JSON inspector reports include the active preset and all check rows; batch CSV a
 
 ## Channel auditioning and phase
 
-Choose **Channels…** in the audio Overview card (Sound details for audio-only files), or **Viewer tools → Audio channels · Solo / Mute / Phase…**. Each channel has **S** (Solo) and **M** (Mute); several channels may be selected. Mute takes precedence over Solo. One solo channel is heard in both speakers. Stereo channels retain left/right placement for muting; multichannel selections use a stereo fold-down with headroom, not a mastering downmix. Monitor in mono lets you audition cancellation. Closing the panel, opening a different file, or choosing another audio track resets monitoring choices.
+Choose **Solo / Mute / Phase…** in the chip row under the player. Each channel has **S** (Solo) and **M** (Mute); several channels may be selected. Mute takes precedence over Solo. One solo channel is heard in both speakers. Stereo channels retain left/right placement for muting; multichannel selections use a stereo fold-down with headroom, not a mastering downmix. Monitor in mono lets you audition cancellation. Closing the panel, opening a different file, or choosing another audio track resets monitoring choices.
 
 Source channel assignments come from reported layouts (Left, Right, Center, LFE, etc.); unreported layouts stay numbered. Embedded track titles are displayed but content roles such as dialogue/music are never guessed. The panel works on channels within the selected audio track; use the existing track arrows to audition separate tracks.
 
