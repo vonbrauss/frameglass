@@ -784,32 +784,35 @@ class Window(QMainWindow):
             box.setContentsMargins(14, 10, 14, 10)
             box.setSpacing(4)
             caption = label(name, 'eyebrow')
-            caption.setFixedHeight(22)  # One heading height on every card (with or without the switch), so text lines up.
+            caption.setMinimumWidth(0)
+            # Every card is built the same way: a fixed-height heading strip, then the value taking
+            # all remaining height. Identical structure is what keeps text level across a row,
+            # whether or not the heading carries the duration switch.
+            strip = QWidget()
+            strip.setFixedHeight(22)
+            heading = QHBoxLayout(strip)
+            heading.setContentsMargins(0, 0, 0, 0)
+            heading.setSpacing(4)
+            heading.addWidget(caption, 0, Qt.AlignVCenter)
+            heading.addStretch()
             switch = None
             if i == 0 and clip_duration.get('real_time'):
                 # One reading at a time: timecode or clock duration, switched from the card's corner.
-                heading = QHBoxLayout()
-                heading.setSpacing(4)
-                caption.setMinimumWidth(0)
-                heading.addWidget(caption)
-                heading.addStretch()
                 switch = QToolButton()
                 switch.setObjectName('durationSwitch')
                 switch.setCursor(Qt.PointingHandCursor)
                 switch.setStyleSheet('QToolButton { padding: 0px 5px; border: 1px solid #3a4756; border-radius: 8px; background: transparent; color: #949eac; font-size: 12px; } QToolButton:hover { color: #e4e8ec; border-color: #56657a; }')
                 switch.setText('⇄')
-                switch.setFixedHeight(20)
-                heading.addWidget(switch)
-                box.addLayout(heading)
-            else:
-                box.addWidget(caption)
+                switch.setFixedHeight(18)
+                heading.addWidget(switch, 0, Qt.AlignVCenter)
+            box.addWidget(strip)
             text = ElidedLabel(value, 'metric')
             text.setMinimumHeight(29)
             if i == 0:
                 metric.setToolTip(clip_duration['note'])
                 text.setToolTip(value + '\n' + clip_duration['note'])
                 text.setAccessibleName('Duration: ' + value + '. ' + clip_duration['note'])
-            box.addWidget(text)
+            box.addWidget(text, 1)
             if switch is not None:
                 both = f"Timecode {value} {clip_duration['mode']} · Actual {clip_duration['real_time']}\n" + clip_duration['note']
                 def show_duration(actual, caption=caption, text=text, switch=switch, timecode=value, title=name):

@@ -74,6 +74,17 @@ class InspectionTests(unittest.TestCase):
         self.assertTrue(self.w.settings.value('duration_actual', False, type=bool))
         self.w.duration_switch.click()
         self.assertEqual(self.w.duration_value.full_text, '00:00:02:00')
+        # The switch in the Duration heading must not shift its text against the File size card.
+        from PySide6.QtWidgets import QApplication, QFrame, QLabel
+        self.w.show()
+        for _ in range(5): QApplication.processEvents()
+        cards = [c for c in self.w.overview.findChildren(QFrame) if c.objectName() == 'metricCard'][:2]
+        def box(card, name):
+            item = next(l for l in card.findChildren(QLabel) if l.objectName() == name)
+            top = item.mapTo(self.w, item.rect().topLeft()).y()
+            return top, item.height()
+        self.assertEqual(box(cards[0], 'eyebrow'), box(cards[1], 'eyebrow'))
+        self.assertEqual(box(cards[0], 'metric'), box(cards[1], 'metric'))
         self.w.inspect('/private/tmp/frameglass-test.mp4')
         until(lambda: self.w.data is not None)
         self.assertIsNone(self.w.duration_switch)
