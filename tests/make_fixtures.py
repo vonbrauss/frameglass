@@ -12,9 +12,9 @@ from frameglass.core import executable
 
 FOLDER = Path('/private/tmp')
 CLIPS = {
-    # 640-wide H.264 video first, stereo AAC second.
-    'frameglass-test.mp4': ['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
-                            '-t', '5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ac', '2'],
+    # The tests expect exactly this: 640-wide 24 fps H.264 first, 48 kHz stereo AAC second, 2 seconds.
+    'frameglass-test.mp4': ['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
+                            '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ac', '2'],
     # Non-drop source timecode starting at 01:00:00:00.
     'frameglass-timecode.mov': ['-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=24', '-t', '3', '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
                                 '-timecode', '01:00:00:00'],

@@ -13,3 +13,4 @@ dist/
 !.env.example
 cookies.txt
 *.cookies.txt
+test-logs/
