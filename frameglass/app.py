@@ -784,7 +784,6 @@ class Window(QMainWindow):
             box.setContentsMargins(14, 10, 14, 10)
             box.setSpacing(4)
             caption = label(name, 'eyebrow')
-            caption.setFixedHeight(18)  # Same heading height on every card, so values line up across a row.
             switch = None
             if i == 0 and clip_duration.get('real_time'):
                 # One reading at a time: timecode or clock duration, switched from the card's corner.
@@ -798,7 +797,8 @@ class Window(QMainWindow):
                 switch.setCursor(Qt.PointingHandCursor)
                 switch.setStyleSheet('QToolButton { padding: 0px 5px; border: 1px solid #3a4756; border-radius: 8px; background: transparent; color: #949eac; font-size: 12px; } QToolButton:hover { color: #e4e8ec; border-color: #56657a; }')
                 switch.setText('⇄')
-                switch.setFixedHeight(18)
+                # Never taller than the plain heading on the File size card, so both cards' text lines up.
+                switch.setFixedHeight(caption.sizeHint().height())
                 heading.addWidget(switch)
                 box.addLayout(heading)
             else:
@@ -810,7 +810,6 @@ class Window(QMainWindow):
                 text.setToolTip(value + '\n' + clip_duration['note'])
                 text.setAccessibleName('Duration: ' + value + '. ' + clip_duration['note'])
             box.addWidget(text)
-            box.addStretch(1)  # Top-align: a taller neighbour must not push this card's contents down.
             if switch is not None:
                 both = f"Timecode {value} {clip_duration['mode']} · Actual {clip_duration['real_time']}\n" + clip_duration['note']
                 def show_duration(actual, caption=caption, text=text, switch=switch, timecode=value, title=name):
