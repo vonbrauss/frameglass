@@ -24,6 +24,57 @@ def channel_assignments(stream):
     return labels if labels and len(labels)==count else [f'Ch {i+1}' for i in range(count)]
 
 
+SHORT={'FL':'L','FR':'R','FC':'C','LFE':'LFE','BC':'Cs','FLC':'Lc','FRC':'Rc'}
+PAIRS=(('FL','FR'),('FLC','FRC'),('SL','SR'),('BL','BR'))
+MINUS_3_DB=math.sqrt(.5)
+# Lo/Ro stereo mixdown: fronts at unity, center and surrounds at -3 dB, LFE left out.
+MIXDOWN={'FL':(1,0),'FR':(0,1),'FC':(MINUS_3_DB,MINUS_3_DB),'LFE':(0,0),'BC':(.5,.5),
+         'BL':(MINUS_3_DB,0),'SL':(MINUS_3_DB,0),'FLC':(MINUS_3_DB,0),'BR':(0,MINUS_3_DB),'SR':(0,MINUS_3_DB),'FRC':(0,MINUS_3_DB)}
+
+
+def short_labels(labels):
+    """Mixer-style channel names. Side and rear surrounds are told apart only when both exist."""
+    both={'SL','BL'}<=set(labels) or {'SR','BR'}<=set(labels)
+    surround={'SL':'Lss' if both else 'Ls','SR':'Rss' if both else 'Rs','BL':'Lrs' if both else 'Ls','BR':'Rrs' if both else 'Rs'}
+    return [SHORT.get(label) or surround.get(label) or label for label in labels]
+
+
+def monitor_options(labels):
+    """Monitor choices for one audio track as (title, mode). The first one is the default.
+
+    A mixdown is offered only when every channel has a reported assignment the
+    fold-down knows; unassigned channels are never panned by guesswork.
+    """
+    count=len(labels);names=short_labels(labels)
+    if count<=1:return [('Mono',('native',))]
+    if count==2:options=[('Stereo',('native',))]
+    elif all(label in MIXDOWN for label in labels):options=[('Stereo mixdown',('mixdown',)),('Player default',('native',))]
+    else:options=[('Player default',('native',))]
+    if count>2:
+        pairs=[(labels.index(left),labels.index(right)) for left,right in PAIRS if left in labels and right in labels]
+        if not pairs and all(label.startswith('Ch ') for label in labels):pairs=[(i,i+1) for i in range(0,count-1,2)]
+        options+=[(f'{names[i]} / {names[j]}',('pair',i,j)) for i,j in pairs]
+    return options+[(f'{names[i]} only',('channel',i)) for i in range(count)]
+
+
+def monitor_route(labels,mode):
+    """(stereo weights, meter weights, meter names) for a monitor mode; None leaves the player's own output."""
+    count=len(labels);names=short_labels(labels);kind=mode[0]
+    if kind=='native':return None
+    stereo=np.zeros((count,2),dtype=np.float32)
+    if kind=='mixdown':
+        for index,label in enumerate(labels):stereo[index]=MIXDOWN[label]
+        return stereo,stereo,['L','R']
+    if kind=='pair':
+        left,right=mode[1],mode[2];stereo[left]=(1,0);stereo[right]=(0,1)
+        return stereo,stereo,[names[left],names[right]]
+    if kind=='channel':
+        # One channel plays in both speakers; the meter shows that single channel.
+        index=mode[1];stereo[index]=(1,1);meter=np.zeros((count,1),dtype=np.float32);meter[index]=1
+        return stereo,meter,[names[index]]
+    raise ValueError('Unknown monitor mode')
+
+
 def pcm_samples(buffer):
     if not buffer.isValid() or not buffer.frameCount():return None
     fmt=buffer.format();types={QAudioFormat.UInt8:('u1',128),QAudioFormat.Int16:('<i2',32768),QAudioFormat.Int32:('<i4',2147483648),QAudioFormat.Float:('<f4',1)}
@@ -85,6 +136,23 @@ class MonitorOutput:
         if count:
             written=self.device.write(bytes(self.pending[:count]))
             if written>0:del self.pending[:written];self.bytes_written+=written
+
+
+class MonitorSelector(QComboBox):
+    """Chooses what the selected audio track sends to the speakers and the meter."""
+    HELP='What you hear and what the meter shows. Stereo mixdown: left/right at full level, center and surrounds at -3 dB, LFE left out.\nMeasurements always read the whole track. Monitoring runs at 1x forward playback.'
+    def __init__(self,player,parent=None):
+        super().__init__(parent);self.player=player;self.options=[];self.setAccessibleName('Audio monitor');self.setMinimumWidth(150)
+        self.currentIndexChanged.connect(self.chosen);player.monitorChanged.connect(self.reload);self.reload()
+    def reload(self):
+        self.options=self.player.monitor_choices();self.blockSignals(True);self.clear()
+        self.addItems([title for title,mode in self.options])
+        self.setCurrentIndex(next((i for i,(title,mode) in enumerate(self.options) if mode==self.player.monitor_mode),0))
+        self.blockSignals(False);self.setEnabled(len(self.options)>1)
+        note=self.player.monitor_note
+        self.setToolTip(self.HELP+('\n\nUsing the player default: '+note if note else ''))
+    def chosen(self,index):
+        if 0<=index<len(self.options):self.player.set_monitor(self.options[index][1])
 
 
 class ChannelPanel(QDialog):

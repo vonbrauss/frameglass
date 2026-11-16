@@ -68,3 +68,7 @@ class InspectionToolTests(unittest.TestCase):
      w.resize(1150,800);w.tabs.setCurrentIndex(2);w.close();QTest.qWait(100)
      self.assertEqual(settings.value('last_tab'),2);self.assertEqual(settings.value('last_file'),'/private/tmp/frameglass-test.mp4')
      restored=Window(settings);self.assertTrue(settings.value('window_geometry'));self.assertGreaterEqual(restored.width(),restored.minimumWidth());restored.close();QTest.qWait(50)
+ def test_meter_shows_named_monitor_channels(self):
+    meter=LevelMeter();meter.set_samples(np.array([[.5,-1.0],[.25,.1]],np.float32),['L','R'])
+    self.assertEqual(meter.names,['L','R']);self.assertAlmostEqual(meter.levels[0],-6.02,places=1);self.assertAlmostEqual(meter.levels[1],0,places=3)
+    meter.set_samples(np.zeros((0,2),np.float32));self.assertEqual(meter.levels,[])

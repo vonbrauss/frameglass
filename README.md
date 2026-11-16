@@ -35,6 +35,10 @@ Tool paths and last browsed folder persist in Qt's standard user settings locati
 
 ## Audio overview and display color
 
+**Monitor** in the audio panel chooses what the selected track sends to your speakers. A 5.1 or 7.1 track defaults to a **Stereo mixdown**: left and right at full level, center and surrounds at −3 dB to their own side, LFE left out. You can also monitor a stereo pair or a single channel. Tracks without reported channel assignments are never panned by guesswork; they offer the player default, numbered pairs and single channels. The peak meter under the player follows the monitor choice and shows its channels by name. Routed monitoring runs at 1× forward playback.
+
+**Measure loudness and peak** reads the whole selected track with all of its channels and reports integrated loudness, true peak and loudness range. The monitor choice does not change the measurement.
+
 All audio streams share one overview panel. Use the left/right arrow icons beside **Track 1 / N** to inspect another track and hear it in playback. A stereo/multichannel stream remains one track; its channel layout appears in the panel. The Tracks tab retains every stream’s complete metadata.
 
 Video overview includes the tagged progressive/interlaced field order. Missing or unknown field order is shown as **Not reported**, without guessing from resolution or frame rate.

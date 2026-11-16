@@ -2,7 +2,9 @@
 from pathlib import Path
 from threading import Event
 
-from PySide6.QtCore import QEvent, QSize, Qt, QUrl, QTimer, QElapsedTimer, QThreadPool
+import numpy as np
+
+from PySide6.QtCore import QEvent, QSize, Qt, QUrl, QTimer, QElapsedTimer, QThreadPool, Signal
 from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut, QPainter, QColor
 from PySide6.QtMultimedia import QMediaPlayer, QVideoSink, QVideoFrame, QAudioBufferOutput
 from PySide6.QtQml import QQmlEngine, QQmlComponent
@@ -10,7 +12,7 @@ from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu,
                               QSlider, QStackedWidget, QToolButton, QVBoxLayout,
                               QWidget, QWidgetAction, QSizePolicy, QDialog)
-from .audition import MonitorOutput,ChannelPanel,pcm_samples,monitor_mix,channel_assignments
+from .audition import MonitorOutput,ChannelPanel,pcm_samples,monitor_mix,channel_assignments,monitor_options,monitor_route,short_labels
 from .core import duration
 from .design import icon, tool_button, Preview
 from .color import display_transform, ColorJob, ColorSignals
@@ -65,6 +67,8 @@ class ScrubSlider(QSlider):
 
 
 class ClipPlayer(QFrame):
+    monitorChanged = Signal()
+
     def __init__(self, preview, path, settings, data, playable=True, audio_only=False):
         super().__init__()
         self.setObjectName('clipPlayer')
@@ -86,6 +90,7 @@ class ClipPlayer(QFrame):
         self.selected_audio_track = 0
         self.audition_solos=set();self.audition_mutes=set();self.audition_mono=False
         self.channel_panel=None;self.monitor=MonitorOutput(self)
+        self.reset_monitor()
         self.speed = 0
         self.held_k = False
         self.pending_step = 0
@@ -207,8 +212,11 @@ class ClipPlayer(QFrame):
             guide_action=viewer_menu.addAction('90% / 80% picture guides')
             guide_action.setCheckable(True);guide_action.toggled.connect(self.set_guides)
         if media_tracks(data)[1]:viewer_menu.addAction('Audio channels · Solo / Mute / Phase…',self.show_audio_channels)
-        meter_action=viewer_menu.addAction('Sample peak meters (before volume)');meter_action.setCheckable(True);meter_action.setChecked(audio_only)
-        self.level_meter=LevelMeter();self.level_meter.setVisible(audio_only);meter_action.toggled.connect(self.level_meter.setVisible)
+        has_audio=bool(media_tracks(data)[1])
+        show_meter=has_audio and settings.value('audio_meter',True,type=bool)
+        meter_action=viewer_menu.addAction('Monitor peak meter (before volume)');meter_action.setCheckable(True);meter_action.setChecked(show_meter);meter_action.setEnabled(has_audio)
+        self.level_meter=LevelMeter();self.level_meter.setVisible(show_meter);meter_action.toggled.connect(self.level_meter.setVisible)
+        meter_action.toggled.connect(lambda shown:settings.setValue('audio_meter',shown))
         self.viewer_button.setMenu(viewer_menu);self.viewer_button.setPopupMode(QToolButton.InstantPopup);controls.addWidget(self.viewer_button)
         for button in (self.play_button, self.volume_button, self.external_button, self.viewer_button):
             button.setFixedSize(26, 28)
@@ -279,24 +287,63 @@ class ClipPlayer(QFrame):
             first=not self.audio_frame_seen
             self.audio_frame_seen=True
             if first:QTimer.singleShot(0,self.apply_audio_track)
-        if self.level_meter.isVisible():self.level_meter.set_buffer(buffer)
-        if self.audition_active() or (self.channel_panel and self.channel_panel.isVisible()):
-            samples=pcm_samples(buffer)
-            if samples is None:return
-            if self.channel_panel:self.channel_panel.samples(samples)
-            if self.audition_active() and self.player and self.player.playbackState()==QMediaPlayer.PlayingState and self.speed==1:
-                try:
-                    tracks=media_tracks(self.data)[1];labels=channel_assignments(tracks[self.selected_audio_track])
-                    if len(labels)!=samples.shape[1]:raise ValueError('Decoder channel count differs from the source layout. Channel monitoring is unavailable for this track.')
-                    self.monitor.write(monitor_mix(samples,labels,self.audition_solos,self.audition_mutes,self.audition_mono),buffer.format().sampleRate(),self.volume.value()/100)
-                except Exception as error:
-                    self.monitor.reset()
-                    if self.channel_panel:self.channel_panel.status.setText('Monitoring unavailable: '+str(error))
+        metering=self.level_meter.isVisible()
+        if not (metering or self.monitor_routed() or (self.channel_panel and self.channel_panel.isVisible())):return
+        samples=pcm_samples(buffer)
+        if samples is None:
+            if metering:self.level_meter.set_buffer(buffer)
+            return
+        if self.channel_panel:self.channel_panel.samples(samples)
+        labels=self.track_labels();matched=len(labels)==samples.shape[1]
+        # The meter shows the monitored signal; without routing that is the decoded track itself.
+        meter,names=samples,(short_labels(labels) if matched else None)
+        if self.monitor_routed():
+            try:
+                if not matched:raise ValueError('Decoder channel count differs from the source layout. Channel monitoring is unavailable for this track.')
+                if self.audition_active():
+                    mix=monitor_mix(samples,labels,self.audition_solos,self.audition_mutes,self.audition_mono);meter,names=mix,['L','R']
+                else:
+                    weights,meter_weights,names=self.monitor_route
+                    mix=samples@weights;meter=samples@meter_weights  # Metered before clipping, so overs stay visible.
+                if self.player and self.player.playbackState()==QMediaPlayer.PlayingState and self.speed==1:
+                    self.monitor.write(np.ascontiguousarray(np.clip(mix,-1,1),dtype='<f4'),buffer.format().sampleRate(),self.volume.value()/100)
+            except Exception as error:
+                self.monitor_unavailable(str(error))
+                meter,names=samples,(short_labels(labels) if matched else None)
+        if metering:self.level_meter.set_samples(meter,names)
 
     def audition_active(self):return bool(self.audition_solos or self.audition_mutes or self.audition_mono)
 
+    def track_labels(self):
+        tracks=media_tracks(self.data)[1]
+        return channel_assignments(tracks[self.selected_audio_track]) if self.selected_audio_track<len(tracks) else []
+
+    def monitor_choices(self):return monitor_options(self.track_labels())
+
+    def reset_monitor(self):
+        """Select the default monitor for the current track: a stereo mixdown for assigned surround layouts."""
+        self.monitor_mode=self.monitor_choices()[0][1];self.monitor_route=monitor_route(self.track_labels(),self.monitor_mode);self.monitor_note=''
+
+    def set_monitor(self,mode):
+        self.monitor.reset();self.monitor_mode=tuple(mode);self.monitor_route=monitor_route(self.track_labels(),self.monitor_mode);self.monitor_note=''
+        self.update_audio_routing();self.monitorChanged.emit()
+
+    def monitor_routed(self):return self.audition_active() or self.monitor_route is not None
+
+    def monitor_unavailable(self,message):
+        self.monitor.reset()
+        if self.channel_panel:self.channel_panel.status.setText('Monitoring unavailable: '+message)
+        if self.monitor_route is not None and not self.audition_active():
+            # Fall back to the player's own output rather than leaving the track silent.
+            self.monitor_mode=('native',);self.monitor_route=None;self.monitor_note=message
+            self.update_audio_routing();self.monitorChanged.emit()
+
     def update_audio_routing(self):
-        if self.audio:self.audio.setMuted(self.audition_active())
+        # Routed monitoring runs at 1x forward only. A mixdown hands faster shuttle back to the
+        # player's own output; a soloed, paired or single-channel choice stays silent there
+        # instead of leaking the other channels.
+        routed=self.audition_active() or (self.monitor_route is not None and (self.monitor_mode!=('mixdown',) or self.speed in (0,1)))
+        if self.audio:self.audio.setMuted(routed)
         self.viewer_button.setToolTip('Viewer tools · channel monitoring active' if self.audition_active() else 'Viewer tools')
 
     def show_audio_channels(self):
@@ -332,9 +379,11 @@ class ClipPlayer(QFrame):
     def set_audio_track(self, index):
         self.monitor.reset();self.audition_solos.clear();self.audition_mutes.clear();self.audition_mono=False
         self.selected_audio_track = index
+        self.reset_monitor()
         if self.channel_panel:self.channel_panel.load_track()
         self.update_audio_routing()
         self.apply_audio_track()
+        self.monitorChanged.emit()
 
     def apply_audio_track(self):
         if self.disposed or not self.player:
@@ -469,6 +518,7 @@ class ClipPlayer(QFrame):
         self.overlay.setIcon(icon(name, '#e5f5ef', 34))
         self.overlay.setToolTip(title)
         self.overlay.setAccessibleName(title)
+        self.update_audio_routing()
 
     def state_changed(self, state):
         if self.disposed:

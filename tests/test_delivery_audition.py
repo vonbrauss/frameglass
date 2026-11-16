@@ -132,4 +132,30 @@ class AuditionTests(unittest.TestCase):
      self.assertTrue(player.audition_active());player.set_audio_track(1);self.assertFalse(player.audition_active());self.assertEqual(len(panel.solo),1)
      panel.mute[0].setChecked(True);panel.close();self.assertFalse(player.audition_active());player.dispose();player.deleteLater();QTest.qWait(20)
 
+ def test_monitor_choices_mixdown_and_meter_names(self):
+    from frameglass.audition import monitor_options,monitor_route,short_labels
+    surround=['FL','FR','FC','LFE','BL','BR'];options=monitor_options(surround)
+    self.assertEqual(options[0],('Stereo mixdown',('mixdown',)));self.assertIn(('Ls / Rs',('pair',4,5)),options);self.assertIn(('C only',('channel',2)),options)
+    weights,meter,names=monitor_route(surround,('mixdown',));self.assertEqual(names,['L','R'])
+    # One full-scale channel at a time: fronts at unity, center and surrounds at -3 dB, LFE silent.
+    np.testing.assert_allclose(np.eye(6,dtype=np.float32)@weights,[[1,0],[0,1],[.7071,.7071],[0,0],[.7071,0],[0,.7071]],atol=1e-4)
+    self.assertEqual(short_labels(['FL','FR','FC','LFE','BL','BR','SL','SR']),['L','R','C','LFE','Lrs','Rrs','Lss','Rss'])
+    weights,meter,names=monitor_route(surround,('channel',2));self.assertEqual(names,['C']);np.testing.assert_allclose(weights[2],[1,1]);self.assertEqual(meter.shape,(6,1))
+    weights,meter,names=monitor_route(surround,('pair',4,5));self.assertEqual(names,['Ls','Rs']);np.testing.assert_allclose(weights[4:],[[1,0],[0,1]])
+    self.assertEqual(monitor_options(['FL','FR'])[0],('Stereo',('native',)));self.assertIsNone(monitor_route(['FL','FR'],('native',)))
+    unassigned=monitor_options(['Ch 1','Ch 2','Ch 3','Ch 4']);self.assertEqual(unassigned[0][1],('native',));self.assertNotIn(('mixdown',),[mode for title,mode in unassigned])
+    self.assertIn(('Ch 3 / Ch 4',('pair',2,3)),unassigned);self.assertEqual(monitor_options(['FC']),[('Mono',('native',))])
+ def test_surround_track_defaults_to_mixdown_and_falls_back(self):
+    from frameglass.player import ClipPlayer
+    from frameglass.design import Preview
+    with tempfile.TemporaryDirectory() as temp:
+     settings=QSettings(str(Path(temp)/'settings.ini'),QSettings.IniFormat)
+     data={'streams':[{'codec_type':'audio','channels':6,'channel_layout':'5.1'},{'codec_type':'audio','channels':2,'channel_layout':'stereo'}]}
+     player=ClipPlayer(Preview(),'/private/tmp/frameglass-test.mp4',settings,data);changes=[];player.monitorChanged.connect(lambda:changes.append(player.monitor_mode))
+     self.assertEqual(player.monitor_mode,('mixdown',));self.assertTrue(player.monitor_routed());self.assertFalse(player.audition_active())
+     player.set_monitor(('channel',2));self.assertEqual(player.monitor_route[2],['C'])
+     player.monitor_unavailable('no device');self.assertEqual(player.monitor_mode,('native',));self.assertFalse(player.monitor_routed());self.assertEqual(player.monitor_note,'no device')
+     player.set_audio_track(1);self.assertEqual(player.monitor_mode,('native',));player.set_audio_track(0);self.assertEqual(player.monitor_mode,('mixdown',))
+     self.assertEqual(len(changes),4);player.dispose();player.deleteLater();QTest.qWait(20)
+
 if __name__=='__main__':unittest.main()

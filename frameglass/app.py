@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 from threading import Event
 
+from shiboken6 import isValid
 from PySide6.QtCore import Qt, QDir, QProcess, QSettings, QTimer, QUrl, QSize, QEvent, QThreadPool, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QFont, QKeySequence, QPixmap, QImage
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -16,6 +17,7 @@ from .tool_manager import ToolController
 from .workspace import QualityWorkspace
 from .inspection_tools import AudioAnalysisDialog
 from .audio import audio_overview
+from .audition import MonitorSelector
 from .delivery import DeliveryBar
 from .player import ClipPlayer
 from .color import scan_mode, display_transform, display_description, ThumbnailJob, ThumbnailSignals
@@ -64,6 +66,7 @@ class Window(QMainWindow):
         self.tool_controller = None
         self.analysis_dialog = None
         self.analysis_summary = None
+        self.loudness_label = None
         self.setAttribute(Qt.WA_DeleteOnClose, True)
         self.setWindowTitle('Frameglass — Media Inspector')
         self.resize(1280, 860)
@@ -344,8 +347,28 @@ class Window(QMainWindow):
     def analysis_closed(self,dialog):
         if self.analysis_dialog is dialog:self.analysis_dialog=None
 
+    def audio_tools(self):
+        """Monitor choice and whole-track loudness for the selected audio track."""
+        widget=QWidget();box=QVBoxLayout(widget);box.setContentsMargins(0,0,0,0);box.setSpacing(6)
+        monitor=QHBoxLayout();monitor.setSpacing(8)
+        caption=label('Monitor','muted');caption.setWordWrap(False);monitor.addWidget(caption)
+        monitor.addWidget(MonitorSelector(self.playback),1);box.addLayout(monitor)
+        measure_row=QHBoxLayout();measure_row.setSpacing(8)
+        measure=QPushButton('Measure loudness and peak');measure.setObjectName('quiet')
+        measure.setToolTip('Reads the whole selected track with all of its channels. The monitor choice does not change the measurement.')
+        measure.clicked.connect(self.open_audio_analysis);measure_row.addWidget(measure)
+        self.loudness_label=ElidedLabel('Not measured','muted');measure_row.addWidget(self.loudness_label,1);box.addLayout(measure_row)
+        return widget
+
+    def show_loudness(self,result):
+        if self.loudness_label is None or not isValid(self.loudness_label):return
+        text=f"Track {result['track']} · {result.get('integrated_lufs','?')} LUFS · {result.get('true_peak_dbfs','?')} dBTP"
+        if result.get('loudness_range_lu'):text+=f" · LRA {result['loudness_range_lu']} LU"
+        self.loudness_label.setText(text);self.loudness_label.setToolTip(text+'\nIntegrated loudness, true peak and loudness range of the whole track (EBU R 128).')
+
     def keep_analysis(self,result,error,token):
         if result and result['path']==self.path and self.analysis_dialog and not self.analysis_dialog.job.cancelled.is_set():
+            self.show_loudness(result)
             self.analysis_summary={k:v for k,v in result.items() if k not in ('waveform','log')}
             self.data.setdefault('audio_measurements',{})[str(result['track'])]=self.analysis_summary
             self.delivery.refresh()
@@ -567,6 +590,7 @@ class Window(QMainWindow):
             self.analysis_dialog.close()
             self.analysis_dialog=None
         self.analysis_summary=None
+        self.loudness_label=None
         self.delivery.set_media(None,None)
         self.header_state.setText('Headers · Reading…')
         self.decode_state_label.setText('Decode · Not scanned')
@@ -847,6 +871,7 @@ class Window(QMainWindow):
             self.audio_selector.currentIndexChanged.connect(audio_pages.setCurrentIndex)
             self.audio_selector.currentIndexChanged.connect(self.playback.set_audio_track)
             audio_card.content.addWidget(audio_pages)
+            audio_card.content.addWidget(self.audio_tools())
             audition=QPushButton('Channels · Solo / Mute / Phase…');audition.clicked.connect(self.playback.show_audio_channels);audio_card.content.addWidget(audition)
             audio_card.content.addStretch()
             cards.append(audio_card)
@@ -923,7 +948,7 @@ class Window(QMainWindow):
             self.stream_layout.addWidget(Disclosure(f"Audio · Track {index+1} · {stream.get('codec_name','Unknown').upper()}",self.rows(technical),index==0))
             if stream.get('tags'):tag_layout.addWidget(Disclosure(f'Track {index+1} tags',self.rows(list(stream['tags'].items()),compact=True)))
         right.addWidget(identity);right.addWidget(facts,1);layout.addWidget(details,3)
-        self.overview_layout.addWidget(hero);self.overview_layout.addWidget(panels)
+        self.overview_layout.addWidget(hero);self.overview_layout.addWidget(self.audio_tools());self.overview_layout.addWidget(panels)
         format_tags=self.data.get('format',{}).get('tags',{})
         if format_tags:tag_layout.insertWidget(0,self.rows(list(format_tags.items()),compact=True))
         if not tag_layout.count():tag_layout.addWidget(label('No descriptive tags embedded in this file.','muted'))

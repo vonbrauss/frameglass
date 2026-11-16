@@ -159,9 +159,16 @@ class AudioAnalysisDialog(QDialog):
 
 class LevelMeter(QWidget):
     def __init__(self,parent=None):
-        super().__init__(parent);self.setFixedHeight(20);self.levels=[];self.setToolTip('Decoded sample peaks in dBFS, before the playback volume control. This is not a true-peak or loudness measurement.')
+        super().__init__(parent);self.setFixedHeight(20);self.levels=[];self.names=None;self.setToolTip('Sample peaks of the monitored signal in dBFS, before the playback volume control. This is not a true-peak or loudness measurement.')
+    def set_samples(self,samples,names=None):
+        """Peaks of float samples (frames x channels), optionally with a name per channel."""
+        if samples is None or not len(samples):self.levels=[];self.names=None;self.update();return
+        peaks=np.max(np.abs(np.asarray(samples,dtype=np.float64)),axis=0)
+        self.levels=[20*math.log10(max(1e-9,float(p))) for p in peaks]
+        self.names=list(names) if names and len(names)==len(self.levels) else None;self.update()
     def set_buffer(self,buffer):
         from PySide6.QtMultimedia import QAudioFormat
+        self.names=None
         if not buffer.isValid() or not buffer.frameCount():self.levels=[];self.update();return
         fmt=buffer.format();kind=fmt.sampleFormat()
         types={QAudioFormat.UInt8:('u1',128),QAudioFormat.Int16:('<i2',32768),QAudioFormat.Int32:('<i4',2147483648),QAudioFormat.Float:('<f4',1)}
@@ -176,7 +183,10 @@ class LevelMeter(QWidget):
         for channel,level in enumerate(self.levels):
             x=channel*width;p.fillRect(QRectF(x,2,width-4,4),QColor('#2d3742'))
             p.fillRect(QRectF(x,2,max(0,min(1,(level+60)/60))*(width-4),4),QColor('#f2aaa9' if level>=0 else '#ecc78e' if level>-6 else '#a1d6c5'))
-            p.setPen(QColor('#9baabb'));p.drawText(QRectF(x,7,width-4,13),Qt.AlignCenter,f'{channel+1}: {level:.1f} dBFS' if level>-90 else f'{channel+1}: −∞')
+            name=self.names[channel] if self.names else str(channel+1)
+            # More than two bars leave no room for units; the tooltip states them.
+            reading=(f'{level:.1f} dBFS' if count<=2 else f'{level:.0f}') if level>-90 else '−∞'
+            p.setPen(QColor('#9baabb'));p.drawText(QRectF(x,7,width-4,13),Qt.AlignCenter,f'{name}: {reading}' if count<=2 else f'{name} {reading}')
 
 
 class PixelLabel(QLabel):
