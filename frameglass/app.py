@@ -784,6 +784,7 @@ class Window(QMainWindow):
             box.setContentsMargins(14, 10, 14, 10)
             box.setSpacing(4)
             caption = label(name, 'eyebrow')
+            caption.setFixedHeight(22)  # One heading height on every card (with or without the switch), so text lines up.
             switch = None
             if i == 0 and clip_duration.get('real_time'):
                 # One reading at a time: timecode or clock duration, switched from the card's corner.
@@ -797,8 +798,7 @@ class Window(QMainWindow):
                 switch.setCursor(Qt.PointingHandCursor)
                 switch.setStyleSheet('QToolButton { padding: 0px 5px; border: 1px solid #3a4756; border-radius: 8px; background: transparent; color: #949eac; font-size: 12px; } QToolButton:hover { color: #e4e8ec; border-color: #56657a; }')
                 switch.setText('⇄')
-                # Never taller than the plain heading on the File size card, so both cards' text lines up.
-                switch.setFixedHeight(caption.sizeHint().height())
+                switch.setFixedHeight(20)
                 heading.addWidget(switch)
                 box.addLayout(heading)
             else:
